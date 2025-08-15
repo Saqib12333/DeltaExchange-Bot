@@ -1,0 +1,31 @@
+exchange:
+  mode: demo
+  symbol: BTCUSD
+  poll_interval_ms: 750
+  use_post_only: true
+  price_shade_ticks: 1
+
+sizing:
+  lot_size_btc: 0.001
+  leverage: 10
+
+grid:
+  seed_offset_usd: 50
+  tp_step_usd: 500
+  avg_step_usd: 750
+  avg_multiplier: 2
+  keep_one_on_flip: true
+
+risk:
+  max_total_lots: 27
+  max_averages_per_cycle: 3
+  min_liq_buffer_pct: 25
+  max_margin_utilization_pct: 60
+  halt_on_error_burst: true
+
+persistence:
+  sqlite_db: ./data/haider_bot.db
+
+logging:
+  level: INFO
+  file: ./logs/haider_bot.log

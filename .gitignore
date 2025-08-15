@@ -1,2 +1,45 @@
 venv/
 .env
+# env variants
+.env.*
+
+# Secrets and keys
+*.key
+*.pem
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Logs and runtime outputs
+logs/
+*.log
+
+# Local data and databases
+data/**
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage/Reports
+coverage*
+.coverage*
+htmlcov/
+reports/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Project-specific
+Stratergy/
+haider_bot/config.local.yaml
