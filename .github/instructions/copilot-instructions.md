@@ -3,11 +3,19 @@ applyTo: '*/**'
 applyTo: '*/**'
 ---
 
-# Copilot Instructions: Haider Grid Trading Bot — Delta Exchange (Demo)
+# Copilot Instructions: Haider Grid Trading Bot — Delta Exchange (MVP)
 
 - Project: Haider Grid Trading Bot — Delta Exchange (demo)
 - Audience: AI coding agent or human developer
 - Goal: Implement a deterministic, limit-only trading bot that executes the “Haider” pyramid/flip strategy on Delta Exchange demo account (BTCUSD). This document captures everything required to design, implement, test, and operate the bot locally in Python.
+
+MVP runtime (Windows/PowerShell):
+
+```powershell
+./venv/Scripts/python.exe -m haider_bot.main status --config haider_bot/config.yaml
+./venv/Scripts/python.exe -m haider_bot.main run --config haider_bot/config.yaml
+./venv/Scripts/python.exe -m haider_bot.main cancel-all --config haider_bot/config.yaml
+```
 
 ## 1. Executive Summary (TL;DR)
 

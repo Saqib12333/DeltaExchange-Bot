@@ -1,6 +1,6 @@
-# Haider Grid Trading Bot — Delta Exchange (Demo)
+# Haider Grid Trading Bot — Delta Exchange (MVP)
 
-This repo contains a deterministic, limit-only trading bot that implements the "Haider" pyramid/flip strategy on Delta Exchange. It is designed to run locally against the Demo (testnet) first.
+Deterministic, limit-only bot that implements the "Haider" pyramid/flip strategy on Delta Exchange. The MVP ships with a 24/7 runner CLI and order-sync logic. Start on Demo (testnet) before Live.
 
 ## Quick Start
 
@@ -37,13 +37,22 @@ DELTA_MODE=demo
 
 If this succeeds, your keys/network/time are set up correctly.
 
+5) Run the bot (MVP runtime)
+
+```powershell
+./venv/Scripts/python.exe -m haider_bot.main status --config haider_bot/config.yaml
+# then start the loop (Ctrl+C to stop)
+./venv/Scripts/python.exe -m haider_bot.main run --config haider_bot/config.yaml
+```
+
 ## Project Layout
 
 - `haider_bot/adapters/delta_adapter.py` — Thin REST adapter with HMAC auth.
 - `haider_bot/core/strategy.py` — Pure functions for seed/TP/AVG intents.
+- `haider_bot/main.py` — CLI and 24/7 runner (status/run/cancel-all).
 - `haider_bot/utils.py` — Time, ID generation, rounding.
 - `starter.py` — Connectivity/order sanity check script for demo.
-- `.github/instructions/copilot-instructions.md` — Full engineering guide for devs and AI agents.
+- `.github/instructions/AGENT.instructions.md` — Engineering guide for devs and AI agents.
 
 Upcoming modules (planned):
 
@@ -53,14 +62,15 @@ Upcoming modules (planned):
 
 Primary runtime config lives in `haider_bot/config.yaml` and environment variables in `.env`.
 
-- Mode: `DELTA_MODE=demo|live` controls base URLs.
-- Symbol: default BTCUSD for demo.
-- Leverage: target 10x (set via adapter after placement where needed).
+- Mode: `exchange.mode` (or `DELTA_MODE`) controls base URLs.
+- Symbol: `exchange.symbol` (default BTCUSD for demo).
+- Polling and execution: `exchange.poll_interval_ms`, `exchange.use_post_only`, `exchange.price_shade_ticks`.
+- Leverage: `sizing.leverage` is set via API at startup.
 
 ## Safety Notes
 
-- No stop-loss by design. The strategy can accumulate large unrealized drawdowns.
-- Use Demo (testnet) only until you fully validate behavior and risk.
+- No stop-loss by design. Strategy can accumulate large unrealized drawdowns.
+- Use Demo (testnet) until you fully validate behavior and risk.
 - Never commit secrets. `.env` and variants are ignored via `.gitignore`.
 
 ## Troubleshooting
