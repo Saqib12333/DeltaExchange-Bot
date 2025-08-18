@@ -67,28 +67,25 @@ Base URLs (REST/WebSocket):
 
 ## 4. Environment & Configuration
 
-`.env` (already present; ensure values):
+Environment setup:
+
+- `.env` holds only your API secrets now:
 
 ```ini
 API_KEY=xxx
 API_SECRET=yyy
-DELTA_MODE=demo   # demo|live
 ```
 
-Notes:
-
-- Trading keys may require IP whitelisting on Delta. Ensure your machine's IPs (IPv4/IPv6) are whitelisted for keys with Trading permission.
-- Keep system time in sync. Authenticated REST requests require the timestamp to be within ~5 seconds (SignatureExpired otherwise).
-
-`config.yaml` (canonical - add to repo):
+- All runtime settings (symbol, base_url, env label, logging, strategy) are configured in `haider_bot/config.yaml`:
 
 ```yaml
 exchange:
-  mode: demo                 # demo|live
+  base_url: https://cdn-ind.testnet.deltaex.org
   symbol: BTCUSD             # contract to trade
   poll_interval_ms: 750      # market data cadence
   use_post_only: true        # try post-only, else fallback to price-shade
   price_shade_ticks: 1       # ticks to move away from aggressive price
+  env_label: LIVE            # used in IDs/logging to tag environment
 
 sizing:
   lot_size_btc: 0.001
@@ -111,7 +108,7 @@ risk:
 persistence:
   sqlite_db: ./data/haider_bot.db
 logging:
-  level: INFO
+  level: INFO               # moved from env to config
   file: ./logs/haider_bot.log
 ```
 
@@ -312,17 +309,16 @@ Safety tests:
 
 Manual checklist before running locally:
 
-- `.env` present with demo API keys.
-- `config.yaml` validated and `mode=demo`.
+- `.env` present with API keys.
+- `config.yaml` validated and correct `exchange.base_url`.
 - Database initialized: `python -m haider_bot.persistence init-db`.
 - Start in dry-run first: `python main.py --dry-run`.
-- Start live-demo: `python main.py --mode demo`.
 
 Quick smoke test (starter):
 
-- Run the connectivity starter to fetch ticker/product and optionally place a tiny post-only seed order on demo:
-  - `python starter.py BTCUSD --mode demo` (does not place orders)
-  - `python starter.py BTCUSD --mode demo --place --side buy --size 1`
+- Run the connectivity starter to fetch ticker/product and optionally place a tiny post-only seed order:
+  - `python starter.py BTCUSD` (does not place orders)
+  - `python starter.py BTCUSD --place --side buy --size 1`
 
 ## 13. Operational Commands (CLI)
 
@@ -380,7 +376,7 @@ python starter.py SYMBOL     # Quick connectivity/order smoke test (demo by defa
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python main.py --mode demo --dry-run   # sanity
+python main.py --dry-run   # sanity
 python main.py arm                     # enable trading
 ```
 
@@ -446,11 +442,12 @@ Assume mark = 10000 USD, long flow:
 
 - Purpose: verify `.env`, base URLs, and adapter before running the full bot.
 - Usage examples:
-  - `python starter.py BTCUSD --mode demo` → Fetch ticker + product only.
-  - `python starter.py BTCUSD --mode demo --place --side buy --size 1` → Place a 1-contract post-only order shaded by 1 tick from mark.
+  - `python starter.py BTCUSD` → Fetch ticker + product only.
+  - `python starter.py BTCUSD --place --side buy --size 1` → Place a 1-contract post-only order shaded by 1 tick from mark.
 - The script rounds price to tick size and shades one tick towards maker side when `--price` is omitted.
 
 ## 25. Demo vs Live Considerations
 
-- Start with `DELTA_MODE=demo` and separate demo keys.
+- Start with `DELTA_BASE_URL` pointing to testnet and separate demo keys.
 - For live, rotate keys, ensure IP whitelist, and lower rate limits and order frequency until behavior is proven.
+- Interlock removed per product requirement; rely on correct base URL and keys.

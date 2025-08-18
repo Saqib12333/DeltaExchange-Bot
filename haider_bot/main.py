@@ -5,28 +5,35 @@ import time
 import signal
 import json
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any
 from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
 from .adapters.delta_adapter import DeltaAdapter, DeltaAPIError
-from .utils import round_price, gen_client_order_id
+from .utils import round_price, gen_client_order_id, gen_target_coid
 from .core.strategy import Position, OrderIntent, Config as StratCfg, compute_next_orders
+
+# In-memory guard for last placed targets to avoid duplicate placements when open-orders GET fails
+_last_target: dict = {}
 
 
 @dataclass
 class BotConfig:
     symbol: str
-    mode: str
+    base_url: Optional[str]
     poll_interval_sec: float
     leverage: Optional[int]
     use_post_only: bool
     shade_ticks: int
+    follow_threshold_ticks: int
+    require_confirmation: bool
+    env_label: str
     log_level: str
     log_file: Optional[str]
     strategy: StratCfg
+    lot_size_btc: Optional[float]
 
 
 def load_config(path: str) -> BotConfig:
@@ -45,28 +52,37 @@ def load_config(path: str) -> BotConfig:
         avg_multiplier=int(grid.get("avg_multiplier", 1)),
         max_total_lots=int(risk.get("max_total_lots", 10)),
     )
-    symbol = str(ex.get("symbol", os.getenv("SYMBOL", "BTCUSD")))
-    mode = str(ex.get("mode", os.getenv("DELTA_MODE", "demo")))
+    # Prefer config values; no env fallbacks for these keys
+    symbol = str(ex.get("symbol", "BTCUSD"))
+    base_url = str(ex.get("base_url", "https://cdn-ind.testnet.deltaex.org"))
     poll_ms = float(ex.get("poll_interval_ms", 1000))
     leverage = data.get("sizing", {}).get("leverage")
+    lot_size_btc = data.get("sizing", {}).get("lot_size_btc")
     use_post_only = bool(ex.get("use_post_only", True))
     shade_ticks = int(ex.get("price_shade_ticks", 1))
-    log_level = str(logging.get("level", os.getenv("LOG_LEVEL", "INFO")))
+    follow_threshold_ticks = int(ex.get("price_follow_threshold_ticks", 2))
+    require_confirmation = bool(ex.get("require_confirmation", False))
+    env_label = str(ex.get("env_label", "LIVE"))
+    log_level = str(logging.get("level", "INFO"))
     log_file = logging.get("file")
     return BotConfig(
         symbol=symbol,
-        mode=mode,
+        base_url=base_url,
         poll_interval_sec=max(0.2, poll_ms / 1000.0),
         leverage=leverage,
         use_post_only=use_post_only,
         shade_ticks=shade_ticks,
+    follow_threshold_ticks=follow_threshold_ticks,
+    require_confirmation=require_confirmation,
+    env_label=env_label,
         log_level=log_level,
         log_file=log_file,
         strategy=strat,
+    lot_size_btc=lot_size_btc,
     )
 
 
-def parse_position(adapter: DeltaAdapter, product_id: int) -> Position:
+def parse_position(adapter: Any, product_id: int) -> Position:
     try:
         pos_data = adapter.get_positions(product_id=product_id)
     except Exception:
@@ -100,7 +116,7 @@ def parse_position(adapter: DeltaAdapter, product_id: int) -> Position:
     return Position(side=side, open_lots=open_lots, avg_price=avg_price)
 
 
-def ensure_leverage(adapter: DeltaAdapter, product_id: int, leverage: Optional[int]) -> None:
+def ensure_leverage(adapter: Any, product_id: int, leverage: Optional[int]) -> None:
     if not leverage:
         return
     try:
@@ -117,13 +133,16 @@ def _shade_price(base_px: float, side: str, tick: float, shade_ticks: int) -> fl
 
 
 def sync_intents(
-    adapter: DeltaAdapter,
+    adapter: Any,
     env: str,
     product_id: int,
     tick: float,
     intents: List[OrderIntent],
     use_post_only: bool,
     shade_ticks: int,
+    follow_threshold_ticks: int = 2,
+    require_confirmation: bool = False,
+    lot_size_btc: Optional[float] = None,
 ) -> None:
     # Fetch current open orders for this product
     try:
@@ -133,15 +152,81 @@ def sync_intents(
         logger.warning(f"Could not fetch open orders: {e}")
         open_items = []
 
+    # Index existing bot orders by client_order_id and by (side, rounded_price)
+    existing_coids = {str(od.get("client_order_id")): od for od in open_items if str(od.get("client_order_id", "")).startswith("HAIDER-")}
+    existing_by_sig = {}
+    for od in open_items:
+        coid = str(od.get("client_order_id") or "")
+        if not coid.startswith("HAIDER-"):
+            continue
+        side = str(od.get("side", "")).lower()
+        try:
+            opx = float(od.get("limit_price") or od.get("price") or 0)
+        except Exception:
+            opx = 0.0
+        opx = round_price(opx, tick)
+        existing_by_sig[(side, opx)] = od
+
     # Build target set and place missing
     target_sigs: List[Tuple[str, float, str]] = []  # (side, price, typ)
+    target_coids: List[str] = []
     seq = 1
     for it in intents:
         px = _shade_price(it.price, it.side, tick, shade_ticks)
         target_sigs.append((it.side, px, it.typ))
+        # Deterministic COID per target prevents duplicates across cycles
+        coid = gen_target_coid(env=env, typ=it.typ, side=it.side, product_id=product_id, price=px, tick_size=tick)
+        target_coids.append(coid)
+        # Skip placement if identical bot order already exists
+        if coid in existing_coids:
+            logger.debug(f"Target {it.typ} {it.side}@{px} already placed as {coid}; skipping")
+            continue
+        # If a bot order exists within follow-threshold ticks, keep it to avoid churn
+        keep_existing = False
+        for (eside, eprice), eod in existing_by_sig.items():
+            if eside == it.side:
+                tick_diff = abs((px - eprice) / tick) if tick > 0 else abs(px - eprice)
+                if tick_diff <= max(0, follow_threshold_ticks):
+                    logger.debug(f"Keeping existing {it.side}@{eprice} (within {tick_diff:.0f} ticks of target {px})")
+                    keep_existing = True
+                    break
+        if keep_existing:
+            continue
+
+        # In-memory guard: if we just placed a similar target recently, skip
+        key = (product_id, it.side, it.typ)
+        last = _last_target.get(key)
+        if last is not None:
+            last_px, last_ts = last
+            tick_diff_mem = abs((px - last_px) / tick) if tick > 0 else abs(px - last_px)
+            # 30s TTL window to avoid rapid re-placement during transient API 401s
+            if tick_diff_mem <= max(0, follow_threshold_ticks) and (time.time() - last_ts) <= 30:
+                logger.debug(f"Skip re-place {it.typ} {it.side}@{px}; last {last_px} within {tick_diff_mem:.0f} ticks and 30s window")
+                continue
+
+        # If confirmation is required, ask the user before placing
+        if require_confirmation:
+            lots = it.qty_lots
+            btc = None
+            if lot_size_btc is not None:
+                try:
+                    btc = float(lots) * float(lot_size_btc)
+                except Exception:
+                    btc = None
+            reason = it.typ.upper()
+            detail = f"About to place: {reason} {it.side.upper()} {lots} lot(s)"
+            if btc is not None:
+                detail += f" (~{btc:.6f} BTC)"
+            detail += f" at {px} (tick={tick}). COID={coid}. Proceed? [y/N]: "
+            try:
+                ans = input(detail)
+            except Exception:
+                ans = "n"
+            if not ans or ans.strip().lower() not in ("y", "yes"):
+                logger.info(f"User declined: {reason} {it.side}@{px}; skipping")
+                continue
+
         try:
-            coid = gen_client_order_id(env=env, typ=it.typ, side=it.side, seq=seq)
-            seq += 1
             res = adapter.place_limit_order(
                 product_id=product_id,
                 side=it.side,
@@ -151,22 +236,41 @@ def sync_intents(
                 client_order_id=coid,
             )
             logger.info(f"Placed {it.typ} {it.side} {it.qty_lots}@{px}: {json.dumps(res)[:400]}...")
+            # Update in-memory last target on successful placement
+            _last_target[key] = (px, time.time())
         except DeltaAPIError as e:
-            logger.warning(f"Placement failed for {it.typ} {it.side}@{px}: {e}")
+            msg = str(e)
+            # Treat duplicate client_order_id as benign (idempotent placement)
+            if "duplicate" in msg.lower() and "client_order_id" in msg.lower():
+                logger.info(f"Duplicate COID for {it.typ} {it.side}@{px}; treating as already placed: {msg}")
+                _last_target[key] = (px, time.time())
+            else:
+                logger.warning(f"Placement failed for {it.typ} {it.side}@{px}: {e}")
 
-    # Cancel stale HAIDER orders that do not match current targets
-    target_set = {(s, p) for (s, p, _t) in target_sigs}
+    # Cancel stale HAIDER orders whose COIDs are not in target set and are outside follow-threshold
+    target_coids_set = set(target_coids)
     for od in open_items:
         coid = str(od.get("client_order_id") or "")
         if not coid.startswith("HAIDER-"):
             continue  # leave non-bot orders alone
-        side = str(od.get("side", "")).lower()
-        try:
-            price = float(od.get("limit_price") or od.get("price") or 0)
-        except Exception:
-            price = 0.0
-        price = round_price(price, tick)
-        if (side, price) not in target_set:
+        if coid not in target_coids_set:
+            side = str(od.get("side", "")).lower()
+            try:
+                price = float(od.get("limit_price") or od.get("price") or 0)
+            except Exception:
+                price = 0.0
+            price = round_price(price, tick)
+            # If this existing order is close to the target side/price, keep it
+            close_to_any = False
+            for (s, p, _t) in target_sigs:
+                if s == side:
+                    tick_diff = abs((p - price) / tick) if tick > 0 else abs(p - price)
+                    if tick_diff <= max(0, follow_threshold_ticks):
+                        close_to_any = True
+                        break
+            if close_to_any:
+                logger.debug(f"Keeping near-target order {coid} {side}@{price}")
+                continue
             try:
                 adapter.cancel_order(client_order_id=coid, product_id=product_id)
                 logger.info(f"Canceled stale order {coid} {side}@{price}")
@@ -193,6 +297,7 @@ def run_bot(config_path: str = "haider_bot/config.yaml") -> int:
         return 2
 
     cfg = load_config(config_path)
+    # Live interlock removed; operate with configured base_url
 
     # Configure logging to file if specified
     try:
@@ -205,7 +310,8 @@ def run_bot(config_path: str = "haider_bot/config.yaml") -> int:
     except Exception:
         pass
 
-    adapter = DeltaAdapter(api_key=api_key, api_secret=api_secret, mode=cfg.mode, user_agent="haider-bot/0.1")
+    # Create real adapter
+    adapter = DeltaAdapter(api_key=api_key, api_secret=api_secret, base_url=cfg.base_url, user_agent="haider-bot/0.1")
 
     # Resolve product & setup (retry-friendly)
     product = None
@@ -230,9 +336,9 @@ def run_bot(config_path: str = "haider_bot/config.yaml") -> int:
             pass
 
     if product is not None:
-        logger.info(f"Starting bot on {cfg.mode.upper()} for {cfg.symbol} (product {product.product_id})")
+        logger.info(f"Starting bot for {cfg.symbol} (product {product.product_id})")
     else:
-        logger.info(f"Starting bot on {cfg.mode.upper()} for {cfg.symbol}; waiting for product metadata to become available…")
+        logger.info(f"Starting bot for {cfg.symbol}; waiting for product metadata to become available…")
     while not _stop:
         try:
             # Resolve product lazily if not yet available
@@ -252,12 +358,15 @@ def run_bot(config_path: str = "haider_bot/config.yaml") -> int:
             if intents:
                 sync_intents(
                     adapter=adapter,
-                    env=cfg.mode,
+                    env=cfg.env_label,
                     product_id=product.product_id,
                     tick=product.tick_size,
                     intents=intents,
                     use_post_only=cfg.use_post_only,
                     shade_ticks=cfg.shade_ticks,
+                    follow_threshold_ticks=cfg.follow_threshold_ticks,
+                    require_confirmation=cfg.require_confirmation,
+                    lot_size_btc=(float(cfg.lot_size_btc) if cfg.lot_size_btc is not None else None),
                 )
             else:
                 logger.debug("No intents this cycle")
@@ -295,7 +404,7 @@ def cli():
         return 2
 
     cfg = load_config(getattr(ns, "config"))
-    adapter = DeltaAdapter(api_key=api_key, api_secret=api_secret, mode=cfg.mode, user_agent="haider-bot/0.1")
+    adapter = DeltaAdapter(api_key=api_key, api_secret=api_secret, base_url=cfg.base_url, user_agent="haider-bot/0.1")
     product = adapter.get_product_by_symbol(cfg.symbol)
 
     if ns.cmd == "run":

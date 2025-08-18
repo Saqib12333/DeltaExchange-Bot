@@ -1,9 +1,12 @@
 exchange:
-  mode: demo
+  base_url: https://api.india.delta.exchange
   symbol: BTCUSD
   poll_interval_ms: 750
   use_post_only: true
   price_shade_ticks: 1
+  price_follow_threshold_ticks: 4
+  require_confirmation: true
+  env_label: LIVE
 
 sizing:
   lot_size_btc: 0.001

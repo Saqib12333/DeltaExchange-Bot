@@ -13,12 +13,21 @@ py -m venv venv
 
 2) Configure environment
 
-- Copy `.env.example` to `.env` and fill in your demo keys:
+- Copy `.env.example` to `.env` and fill in your keys. For Live, set:
 
 ```
-API_KEY=your_demo_key
-API_SECRET=your_demo_secret
-DELTA_MODE=demo
+API_KEY=your_live_key
+API_SECRET=your_live_secret
+DELTA_BASE_URL=https://api.india.delta.exchange
+LOG_LEVEL=INFO
+SYMBOL=BTCUSD
+ENV_LABEL=LIVE
+```
+
+- For Demo/Testnet use:
+
+```
+DELTA_BASE_URL=https://cdn-ind.testnet.deltaex.org
 ```
 
 - Ensure your API key has Trading permission and (if required) your machine's IP is whitelisted on Delta.
@@ -26,16 +35,16 @@ DELTA_MODE=demo
 3) Connectivity smoke test (no orders)
 
 ```powershell
-./venv/Scripts/python.exe starter.py BTCUSD --mode demo
+./venv/Scripts/python.exe starter.py BTCUSD
 ```
 
-4) Place a tiny seed order on demo (post-only, 1 contract)
+4) Place a tiny seed order (post-only, 1 contract)
 
 ```powershell
-./venv/Scripts/python.exe starter.py BTCUSD --mode demo --place --side buy --size 1
+./venv/Scripts/python.exe starter.py BTCUSD --place --side buy --size 1
 ```
 
-If this succeeds, your keys/network/time are set up correctly.
+If this succeeds, your keys/network/time are set up correctly. For demo instability on private writes, add `--retry`.
 
 5) Run the bot (MVP runtime)
 
@@ -62,15 +71,16 @@ Upcoming modules (planned):
 
 Primary runtime config lives in `haider_bot/config.yaml` and environment variables in `.env`.
 
-- Mode: `exchange.mode` (or `DELTA_MODE`) controls base URLs.
-- Symbol: `exchange.symbol` (default BTCUSD for demo).
+- Base URL: `exchange.base_url` (or `DELTA_BASE_URL`) controls REST host. On transient 5xx from the configured host for private endpoints, the adapter will retry once using `DELTA_ALT_BASE_URL` if set (defaults to the global testnet host).
+	- For an offline demo, you can set `DELTA_BASE_URL=mock://demo` to use the built-in mock adapter. This lets you run `status`/`run`/`starter.py` without hitting the network.
+- Symbol: `exchange.symbol` (default BTCUSD).
 - Polling and execution: `exchange.poll_interval_ms`, `exchange.use_post_only`, `exchange.price_shade_ticks`.
 - Leverage: `sizing.leverage` is set via API at startup.
 
 ## Safety Notes
 
 - No stop-loss by design. Strategy can accumulate large unrealized drawdowns.
-- Use Demo (testnet) until you fully validate behavior and risk.
+- Point `DELTA_BASE_URL` to testnet until you fully validate behavior and risk. If you see 502s on private endpoints from the India testnet host, set `DELTA_ALT_BASE_URL=https://testnet-api.delta.exchange` to enable one-off fallback.
 - Never commit secrets. `.env` and variants are ignored via `.gitignore`.
 
 ## Troubleshooting

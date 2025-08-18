@@ -18,6 +18,19 @@ def gen_client_order_id(env: str, typ: str, side: str, seq: int) -> str:
     return f"HAIDER-{env.upper()}-{iso_ts()}-{typ.upper()}-{side.upper()}-{seq:02d}"
 
 
+def gen_target_coid(env: str, typ: str, side: str, product_id: int, price: float, tick_size: float) -> str:
+    """Deterministic client_order_id for a given target.
+
+    Format: HAIDER-{ENV}-{TYPE}-{SIDE}-P{product_id}-T{ticks}
+    where ticks = int(round(price / tick_size)). This makes placements idempotent across cycles.
+    """
+    try:
+        ticks = int(round(price / tick_size)) if tick_size > 0 else int(round(price))
+    except Exception:
+        ticks = int(round(price))
+    return f"HAIDER-{env.upper()}-{typ.upper()}-{side.upper()}-P{product_id}-T{ticks}"
+
+
 def clamp_to_step(value: float, step: float) -> float:
     if step <= 0:
         return value

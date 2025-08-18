@@ -1,7 +1,8 @@
 venv/
 .env
-# env variants
+# env variants (but keep template example)
 .env.*
+!.env.example
 
 # Secrets and keys
 *.key
@@ -41,5 +42,8 @@ Thumbs.db
 .DS_Store
 
 # Project-specific
+# Ignore generated or binary strategy documents but keep the markdown
 Stratergy/
 haider_bot/config.local.yaml
+haider_bot/__pycache__/
+haider_bot/adapters/__pycache__/
