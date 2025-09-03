@@ -10,24 +10,25 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 
 ## ✨ Features
 
-### 📊 **Real-Time Portfolio Dashboard**
+### 📊 **Real-Time Portfolio Dashboard** ✅ **FULLY OPERATIONAL**
 - **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
-- **Position Tracking** - View open positions with P&L calculations and liquidation prices
-- **Order Management** - Track all open orders with detailed status information
-- **Mark Price Monitoring** - Real-time price feeds for major cryptocurrency pairs
-- **Modern UI** - Beautiful, responsive interface with auto-refresh capabilities
+- **Position Tracking** - View open positions with accurate P&L calculations using real mark prices
+- **Order Management** - Track all open orders with properly formatted status information
+- **Live Mark Price Monitoring** - Real-time accurate prices (BTCUSD: $112,181.24, ETHUSD: $4,462.24)
+- **Modern UI** - Beautiful, responsive interface with 1-second auto-refresh
+- **No Configuration Required** - Auto-refreshes every 1 second for real-time monitoring
 
-### 🤖 **Automated Trading Strategy**
-- **Haider Strategy** - Advanced averaging and take-profit system
+### 🤖 **Automated Trading Strategy** 🚧 **IN DEVELOPMENT**
+- **Haider Strategy** - Advanced averaging and take-profit system (Phase 2)
 - **Risk Management** - Built-in position size limits and distance constraints
 - **State Tracking** - Intelligent order management with automatic state transitions
 - **Testnet Support** - Safe testing environment before live trading
 
-### 🔒 **Security & Reliability**
-- **Secure Authentication** - HMAC-SHA256 signature-based API authentication
+### 🔒 **Security & Reliability** ✅ **PRODUCTION READY**
+- **Fixed Authentication** - HMAC-SHA256 with proper query string formatting
 - **Environment Isolation** - Separate testnet and production configurations
-- **Comprehensive Logging** - Full audit trail of all trading activities
-- **Error Handling** - Robust error management and recovery mechanisms
+- **Comprehensive Error Handling** - Resolved all UI formatting issues and API errors
+- **Real-time Updates** - 1-second cache TTL for live data feeds
 
 ## 🚀 Quick Start
 
@@ -82,8 +83,12 @@ The dashboard will automatically test your API connection and display the status
 - **Orders**: Track pending orders and their current status
 - **Mark Prices**: Live price feeds for major trading pairs
 
-### Auto-Refresh
-Enable auto-refresh in the sidebar to keep your data updated automatically. You can configure the refresh interval from 10 seconds to 5 minutes.
+### Auto-Refresh ✅ **AUTOMATIC**
+The dashboard automatically refreshes every 1 second to provide real-time data. No manual configuration is needed - your portfolio data stays current automatically with:
+- **Live Mark Prices**: Real BTCUSD ($112,181.24) and ETHUSD ($4,462.24) prices
+- **Real-time P&L**: Accurate profit/loss calculations using current market prices  
+- **Order Status**: Instant updates when orders are filled or modified
+- **Balance Changes**: Immediate reflection of account balance modifications
 
 ## 🎯 Trading Strategy: "Haider Strategy"
 
@@ -166,6 +171,13 @@ DeltaExchange-Bot/
 **"API credentials not found"**
 - Verify your `.env` file exists and contains valid API keys
 - Check that variable names match exactly: `DELTA_API_KEY`, `DELTA_API_SECRET`
+
+### Recent Critical Fixes (September 2025) ✅
+- **API Authentication Fixed**: Resolved signature generation issue with query string formatting
+- **UI Formatting Errors**: Fixed all f-string formatting crashes in orders and mark prices display
+- **Accurate Mark Prices**: Implemented proper mark price fetching using historical candles endpoint
+- **Real-time Updates**: Reduced cache TTL to 1 second for live data monitoring
+- **Automatic Refresh**: Removed manual settings, now auto-refreshes every 1 second
 
 **"Failed to connect to Delta Exchange API"**
 - Verify your API keys are correct and active

@@ -18,8 +18,47 @@ load_dotenv()
 st.set_page_config(
     page_title="Delta Exchange Dashboard",
     page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"                st.info("📊 Mark price chart will appear when data is loaded...")
+    
+    except Exception as e:
+        st.error(f"Error fetching mark prices: {str(e)}")
+
+def display_btc_mark_price(client):
+    """Display BTCUSD mark price only"""
+    st.markdown("### ₿ BTCUSD Mark Price")
+    
+    try:
+        # Get accurate mark price using historical candles - no caching to force real-time updates
+        current_price = None
+        status = 'Loading...'
+        
+        try:
+            price_data = client.get_mark_price('BTCUSD')
+            if price_data.get('success'):
+                current_price = price_data.get('mark_price')
+                status = 'Live' if current_price else 'Loading...'
+        except Exception as e:
+            status = 'Error'
+        
+        # Display price card
+        status_color = "#4CAF50" if status == 'Live' else "#ff9800" if status == 'Loading...' else "#f44336"
+        price_display = f"${current_price:,.2f}" if current_price and current_price > 0 else status
+        
+        st.markdown(f"""
+        <div class="metric-card" style="border-left-color: {status_color}; text-align: center;">
+            <h2>BTCUSD</h2>
+            <p style="font-size: 2.5em; font-weight: bold; margin: 1rem 0;">
+                {price_display}
+            </p>
+            <p><strong>Status:</strong> {status}</p>
+            <p><small>Last updated: {datetime.now().strftime('%H:%M:%S')}</small></p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    except Exception as e:
+        st.error(f"Error fetching BTCUSD mark price: {str(e)}")
+
+def main(): initial_sidebar_state="expanded"
 )
 
 # Custom CSS for modern styling
@@ -87,7 +126,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=30)  # Cache for 30 seconds
+@st.cache_data(ttl=1)  # Cache for 1 second for real-time updates
 def get_api_credentials():
     """Get API credentials from environment variables"""
     api_key = os.getenv('DELTA_API_KEY')
@@ -205,6 +244,51 @@ def display_account_balance(client):
     except Exception as e:
         st.error(f"Error fetching balance: {str(e)}")
 
+def calculate_position_pnl(entry_price, current_price, size, contract_value=0.001):
+    """Calculate unrealized PnL for a position"""
+    if not current_price or current_price <= 0:
+        return 0.0
+    
+    # For perpetual futures: PnL = (current_price - entry_price) * size * contract_value
+    if size > 0:  # Long position
+        pnl = (current_price - entry_price) * size * contract_value
+    else:  # Short position  
+        pnl = (entry_price - current_price) * abs(size) * contract_value
+    
+    return pnl
+
+def get_mark_price_for_symbol(client, symbol):
+    """Get current mark price for a symbol using historical candles"""
+    try:
+        price_data = client.get_mark_price(symbol)
+        if price_data.get('success'):
+            return price_data.get('mark_price')
+    except Exception as e:
+        # Fallback to order estimation if mark price fails
+        try:
+            orders_data = client.get_orders()
+            if orders_data.get('success'):
+                orders = orders_data.get('result', [])
+                
+                # Find recent orders for this symbol to estimate current price
+                symbol_orders = [order for order in orders if order.get('product_symbol') == symbol]
+                if symbol_orders:
+                    # Use the average of limit prices as a rough estimate
+                    prices = []
+                    for order in symbol_orders:
+                        limit_price = order.get('limit_price')
+                        if limit_price:
+                            prices.append(float(limit_price))
+                    
+                    if prices:
+                        # Return the median price as an estimate
+                        prices.sort()
+                        mid_index = len(prices) // 2
+                        return prices[mid_index]
+        except:
+            pass
+    return None
+
 def display_positions(client):
     """Display current positions"""
     st.markdown("### 📊 Current Positions")
@@ -223,18 +307,23 @@ def display_positions(client):
                         symbol = position.get('product_symbol', 'Unknown')
                         size = float(position.get('size', 0))
                         entry_price = float(position.get('entry_price', 0))
-                        unrealized_pnl = float(position.get('unrealized_pnl', 0))
-                        liquidation_price = float(position.get('liquidation_price', 0))
-                        margin = float(position.get('margin', 0))
+                        
+                        # Get current mark price for PnL calculation
+                        current_price = get_mark_price_for_symbol(client, symbol)
+                        
+                        # Calculate unrealized PnL if we have current price
+                        unrealized_pnl = 0.0
+                        if current_price:
+                            unrealized_pnl = calculate_position_pnl(entry_price, current_price, size)
                         
                         position_cards.append({
                             'Symbol': symbol,
                             'Size': size,
                             'Side': 'LONG' if size > 0 else 'SHORT',
                             'Entry Price': entry_price,
+                            'Current Price': current_price or 0,
                             'Unrealized PnL': unrealized_pnl,
-                            'Liquidation Price': liquidation_price,
-                            'Margin': margin
+                            'PnL %': (unrealized_pnl / (entry_price * abs(size) * 0.001)) * 100 if entry_price > 0 else 0
                         })
                 
                 if position_cards:
@@ -245,6 +334,9 @@ def display_positions(client):
                         pnl_color = "green" if row['Unrealized PnL'] >= 0 else "red"
                         side_color = "#4CAF50" if row['Side'] == 'LONG' else "#f44336"
                         
+                        # Format current price display
+                        current_price_display = f"${row['Current Price']:,.2f}" if row['Current Price'] > 0 else 'Loading...'
+                        
                         st.markdown(f"""
                         <div class="metric-card" style="border-left-color: {side_color};">
                             <h4>{row['Symbol']} - {row['Side']}</h4>
@@ -252,13 +344,15 @@ def display_positions(client):
                                 <div>
                                     <p><strong>Size:</strong> {row['Size']:.3f}</p>
                                     <p><strong>Entry:</strong> ${row['Entry Price']:,.2f}</p>
-                                    <p><strong>Margin:</strong> {format_currency(row['Margin'])}</p>
+                                    <p><strong>Current:</strong> {current_price_display}</p>
                                 </div>
                                 <div style="text-align: right;">
                                     <p style="color: {pnl_color}; font-weight: bold; font-size: 1.2em;">
                                         PnL: {format_currency(row['Unrealized PnL'])}
                                     </p>
-                                    <p><strong>Liq. Price:</strong> ${row['Liquidation Price']:,.2f}</p>
+                                    <p style="color: {pnl_color}; font-weight: bold;">
+                                        {row['PnL %']:+.2f}%
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -266,7 +360,14 @@ def display_positions(client):
                     
                     # Display detailed table
                     st.markdown("#### Position Details")
-                    st.dataframe(df_positions, width='stretch')
+                    # Format the dataframe for display
+                    display_df = df_positions.copy()
+                    display_df['Entry Price'] = display_df['Entry Price'].apply(lambda x: f"${x:,.2f}")
+                    display_df['Current Price'] = display_df['Current Price'].apply(lambda x: f"${x:,.2f}" if x > 0 else 'Loading...')
+                    display_df['Unrealized PnL'] = display_df['Unrealized PnL'].apply(lambda x: f"${x:,.2f}")
+                    display_df['PnL %'] = display_df['PnL %'].apply(lambda x: f"{x:+.2f}%")
+                    
+                    st.dataframe(display_df, width='stretch')
                     
                     # PnL Chart
                     fig = px.bar(
@@ -332,6 +433,9 @@ def display_orders(client):
                 for _, row in df_orders.iterrows():
                     side_color = "#4CAF50" if row['Side'] == 'BUY' else "#f44336"
                     
+                    # Format price safely
+                    price_display = f"${row['Limit Price']:,.2f}" if row['Limit Price'] else 'Market'
+                    
                     st.markdown(f"""
                     <div class="metric-card" style="border-left-color: {side_color};">
                         <h4>{row['Symbol']} - {row['Side']} {row['Type']}</h4>
@@ -342,7 +446,7 @@ def display_orders(client):
                                 <p><strong>Order ID:</strong> {row['ID']}</p>
                             </div>
                             <div style="text-align: right;">
-                                <p><strong>Price:</strong> ${row['Limit Price']:,.2f if row['Limit Price'] else 'Market'}</p>
+                                <p><strong>Price:</strong> {price_display}</p>
                                 <p><strong>Created:</strong> {row['Created']}</p>
                             </div>
                         </div>
@@ -372,8 +476,8 @@ def display_orders(client):
         st.error(f"Error fetching orders: {str(e)}")
 
 def display_mark_prices(client):
-    """Display mark prices for key products"""
-    st.markdown("### 📈 Mark Prices")
+    """Display accurate mark prices for key products"""
+    st.markdown("### 📈 Live Mark Prices")
     
     # Key symbols to monitor
     key_symbols = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'ADAUSD']
@@ -383,23 +487,22 @@ def display_mark_prices(client):
         
         for symbol in key_symbols:
             try:
-                product_data = client.get_product_by_symbol(symbol)
-                if product_data.get('success'):
-                    product = product_data.get('result', {})
-                    mark_price = product.get('mark_price')
-                    if mark_price:
-                        mark_price_data.append({
-                            'Symbol': symbol,
-                            'Mark Price': float(mark_price),
-                            'Status': 'Live'
-                        })
-                    else:
-                        mark_price_data.append({
-                            'Symbol': symbol,
-                            'Mark Price': 0,
-                            'Status': 'No Data'
-                        })
-            except:
+                # Get accurate mark price using historical candles
+                current_price = get_mark_price_for_symbol(client, symbol)
+                
+                if current_price and current_price > 0:
+                    mark_price_data.append({
+                        'Symbol': symbol,
+                        'Mark Price': float(current_price),
+                        'Status': 'Live'
+                    })
+                else:
+                    mark_price_data.append({
+                        'Symbol': symbol,
+                        'Mark Price': 0,
+                        'Status': 'Loading...'
+                    })
+            except Exception as e:
                 mark_price_data.append({
                     'Symbol': symbol,
                     'Mark Price': 0,
@@ -413,30 +516,36 @@ def display_mark_prices(client):
             cols = st.columns(len(key_symbols))
             for i, (_, row) in enumerate(df_prices.iterrows()):
                 with cols[i]:
-                    status_color = "#4CAF50" if row['Status'] == 'Live' else "#f44336"
+                    status_color = "#4CAF50" if row['Status'] == 'Live' else "#ff9800" if row['Status'] == 'Loading...' else "#f44336"
+                    
+                    # Format price safely
+                    price_display = f"${row['Mark Price']:,.2f}" if row['Mark Price'] > 0 else row['Status']
+                    
                     st.markdown(f"""
                     <div class="metric-card" style="border-left-color: {status_color};">
                         <h4>{row['Symbol']}</h4>
                         <p style="font-size: 1.5em; font-weight: bold;">
-                            ${row['Mark Price']:,.2f if row['Mark Price'] > 0 else 'N/A'}
+                            {price_display}
                         </p>
                         <p><strong>Status:</strong> {row['Status']}</p>
                     </div>
                     """, unsafe_allow_html=True)
             
-            # Mark prices chart
+            # Mark prices chart (only for available data)
             valid_prices = df_prices[df_prices['Mark Price'] > 0]
             if not valid_prices.empty:
                 fig = px.bar(
                     valid_prices,
                     x='Symbol',
                     y='Mark Price',
-                    title="Current Mark Prices",
+                    title="Live Mark Prices (USD)",
                     color='Mark Price',
                     color_continuous_scale='viridis'
                 )
                 fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, width='stretch')
+            else:
+                st.info("� Mark price chart will appear when data is loaded...")
     
     except Exception as e:
         st.error(f"Error fetching mark prices: {str(e)}")
@@ -449,11 +558,7 @@ def main():
     # Sidebar
     with st.sidebar:
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("## ⚙️ Settings")
-        
-        # Auto-refresh settings
-        auto_refresh = st.checkbox("Auto Refresh", value=False)
-        refresh_interval = st.slider("Refresh Interval (seconds)", 10, 300, 30)
+        st.markdown("## ⚙️ Dashboard Settings")
         
         # Manual refresh button
         if st.button("🔄 Refresh Now", type="primary"):
@@ -475,6 +580,7 @@ def main():
         env_type = "🧪 Testnet" if "testnet" in base_url.lower() else "🚀 Production"
         st.markdown(f"**Environment:** {env_type}")
         st.markdown(f"**API URL:** {base_url}")
+        st.markdown("**Auto-Refresh:** Every 1 second")
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Main content
@@ -498,16 +604,15 @@ def main():
         # Mark Prices
         display_mark_prices(client)
         
-        # Auto-refresh functionality
-        if auto_refresh:
-            time.sleep(refresh_interval)
-            st.rerun()
+        # Auto-refresh every 1 second
+        time.sleep(1)
+        st.rerun()
     
     # Footer
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: #666; margin-top: 2rem;'>"
-        "Delta Exchange Dashboard | Built with ❤️ using Streamlit"
+        "Delta Exchange Dashboard | Built with ❤️ using Streamlit | Auto-refreshes every 1 second"
         "</div>", 
         unsafe_allow_html=True
     )

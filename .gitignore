@@ -10,3 +10,4 @@ venv/
 # Logs and runtime outputs
 logs/
 *.log
+__pycache__/

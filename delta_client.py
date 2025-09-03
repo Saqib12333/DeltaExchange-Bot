@@ -72,13 +72,13 @@ class DeltaExchangeClient:
         body = ''
         
         if params:
-            # Properly format query string for Delta API - for signature only
+            # Properly format query string for Delta API - for signature include ?
             query_params = []
             for k, v in params.items():
                 query_params.append(f"{k}={v}")
-            query_string = '&'.join(query_params)
+            query_string = '?' + '&'.join(query_params)  # Include ? for signature
             # Construct full URL with query string
-            url = f"{url}?{query_string}"
+            url = f"{url}?" + '&'.join(query_params)  # URL gets ? as well
         
         if data:
             body = json.dumps(data, separators=(',', ':'))  # Compact JSON format
@@ -199,7 +199,7 @@ class DeltaExchangeClient:
     
     def get_mark_price(self, symbol: str) -> Dict[str, Any]:
         """
-        Get mark price for a product
+        Get mark price for a product using historical candles
         
         Args:
             symbol: Product symbol
@@ -208,16 +208,70 @@ class DeltaExchangeClient:
             Mark price data
         """
         try:
-            # Get product first to get the mark price
-            product_data = self.get_product_by_symbol(symbol)
-            if product_data.get('success'):
-                product = product_data.get('result', {})
-                # Mark price might be in the product specs or we need to get it from ticker
-                return {'success': True, 'mark_price': product.get('mark_price')}
-            return product_data
+            import time
+            
+            # Use MARK:symbol format to get mark price from candles
+            mark_symbol = f"MARK:{symbol}"
+            
+            # Get current time and 2 minutes ago to ensure we get latest data
+            end_time = int(time.time())
+            start_time = end_time - 120  # 2 minutes ago
+            
+            params = {
+                'symbol': mark_symbol,
+                'resolution': '1m',
+                'start': start_time,
+                'end': end_time
+            }
+            
+            candles_data = self._make_request('GET', '/v2/history/candles', params=params)
+            
+            if candles_data.get('success'):
+                candles = candles_data.get('result', [])
+                if candles:
+                    # Get the most recent candle and use its close price as mark price
+                    latest_candle = candles[-1]
+                    mark_price = float(latest_candle['close'])
+                    return {'success': True, 'mark_price': mark_price}
+                else:
+                    return {'success': False, 'error': 'No candle data available'}
+            else:
+                return candles_data
+                
         except Exception as e:
             self.logger.error(f"Failed to get mark price for {symbol}: {e}")
             return {'success': False, 'error': str(e)}
+    
+    def get_historical_candles(self, symbol: str, resolution: str = '1m', 
+                              start_time: Optional[int] = None, 
+                              end_time: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Get historical OHLC candle data
+        
+        Args:
+            symbol: Product symbol (use "MARK:SYMBOL" for mark price data)
+            resolution: Time resolution (1m, 5m, 15m, 1h, 4h, 1d, etc.)
+            start_time: Start time (Unix timestamp)
+            end_time: End time (Unix timestamp)
+            
+        Returns:
+            Historical candle data
+        """
+        import time
+        
+        if not end_time:
+            end_time = int(time.time())
+        if not start_time:
+            start_time = end_time - 3600  # Default to 1 hour ago
+            
+        params = {
+            'symbol': symbol,
+            'resolution': resolution,
+            'start': start_time,
+            'end': end_time
+        }
+        
+        return self._make_request('GET', '/v2/history/candles', params=params)
     
     def get_orderbook(self, symbol: str, depth: int = 20) -> Dict[str, Any]:
         """
@@ -225,7 +279,7 @@ class DeltaExchangeClient:
         
         Args:
             symbol: Product symbol
-            depth: Orderbook depth
+            depth: Orderbook depth (default: 20, max: 1000)
             
         Returns:
             Orderbook data
