@@ -92,7 +92,7 @@ def get_api_credentials():
     """Get API credentials from environment variables"""
     api_key = os.getenv('DELTA_API_KEY')
     api_secret = os.getenv('DELTA_API_SECRET')
-    base_url = os.getenv('DELTA_BASE_URL', 'https://api.delta.exchange')
+    base_url = os.getenv('DELTA_BASE_URL', 'https://api.india.delta.exchange')
     use_testnet = os.getenv('USE_TESTNET', 'false').lower() == 'true'
     
     if use_testnet:
@@ -194,7 +194,7 @@ def display_account_balance(client):
                     
                     # Display detailed table
                     st.markdown("#### Detailed Balance")
-                    st.dataframe(df_balance, use_container_width=True)
+                    st.dataframe(df_balance, width='stretch')
                 else:
                     st.info("No balances found.")
             else:
@@ -266,7 +266,7 @@ def display_positions(client):
                     
                     # Display detailed table
                     st.markdown("#### Position Details")
-                    st.dataframe(df_positions, use_container_width=True)
+                    st.dataframe(df_positions, width='stretch')
                     
                     # PnL Chart
                     fig = px.bar(
@@ -278,7 +278,7 @@ def display_positions(client):
                         title="Unrealized PnL by Position"
                     )
                     fig.update_layout(showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 else:
                     st.info("No open positions found.")
             else:
@@ -351,7 +351,7 @@ def display_orders(client):
                 
                 # Display detailed table
                 st.markdown("#### Order Details")
-                st.dataframe(df_orders, use_container_width=True)
+                st.dataframe(df_orders, width='stretch')
                 
                 # Orders by side chart
                 side_counts = df_orders['Side'].value_counts()
@@ -361,7 +361,7 @@ def display_orders(client):
                     title="Orders by Side",
                     color_discrete_map={'BUY': '#4CAF50', 'SELL': '#f44336'}
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
                 
             else:
                 st.info("No open orders found.")
@@ -436,7 +436,7 @@ def display_mark_prices(client):
                     color_continuous_scale='viridis'
                 )
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
     
     except Exception as e:
         st.error(f"Error fetching mark prices: {str(e)}")
@@ -458,7 +458,7 @@ def main():
         # Manual refresh button
         if st.button("🔄 Refresh Now", type="primary"):
             st.cache_data.clear()
-            st.experimental_rerun()
+            st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -501,7 +501,7 @@ def main():
         # Auto-refresh functionality
         if auto_refresh:
             time.sleep(refresh_interval)
-            st.experimental_rerun()
+            st.rerun()
     
     # Footer
     st.markdown("---")

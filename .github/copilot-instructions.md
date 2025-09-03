@@ -3,7 +3,7 @@
 ## Architecture Overview
 
 This is a **cryptocurrency trading automation system** for Delta Exchange India, consisting of:
-- **Streamlit Dashboard** (`streamlit_app.py`) - Real-time portfolio monitoring with modern UI
+- **Streamlit Dashboard** (`app.py`) - Real-time portfolio monitoring with modern UI
 - **API Client** (`delta_client.py`) - Delta Exchange REST API wrapper with HMAC-SHA256 authentication
 - **Trading Strategy** (`Stratergy/stratergy.md`) - Formal specification for "Haider Strategy" automation
 - **Environment Management** (`.env`) - API credentials and configuration
@@ -48,8 +48,7 @@ The **Haider Strategy** (`Stratergy/stratergy.md`) defines a complex averaging +
 
 ### Setup & Running
 ```bash
-python setup.py          # Full setup with dependency installation
-streamlit run streamlit_app.py  # Direct launch
+streamlit run app.py     # Launch dashboard
 ```
 
 ### Environment Configuration
@@ -68,10 +67,15 @@ is_connected = client.test_connection()  # Returns boolean
 ## Critical Files & Responsibilities
 
 - **`delta_client.py`**: API abstraction layer - modify for new endpoints
-- **`streamlit_app.py`**: UI components - extend for new visualizations  
+- **`app.py`**: UI components - extend for new visualizations  
 - **`Stratergy/stratergy.md`**: Strategy specification - reference for automation logic
 - **`Delta-API-Docs.md`**: Complete API reference - consult for new integrations
 - **`.env`**: Runtime configuration - never commit with real credentials
+
+## Official Documentation
+
+- **Delta Exchange API Docs**: https://docs.delta.exchange/
+- **India Platform**: https://api.india.delta.exchange
 
 ## Integration Points & Dependencies
 

@@ -11,7 +11,7 @@ class DeltaExchangeClient:
     Delta Exchange API Client for portfolio management and trading
     """
     
-    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://api.delta.exchange"):
+    def __init__(self, api_key: str, api_secret: str, base_url: str = "https://api.india.delta.exchange"):
         """
         Initialize the Delta Exchange client
         
@@ -72,12 +72,18 @@ class DeltaExchangeClient:
         body = ''
         
         if params:
-            query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            # Properly format query string for Delta API - for signature only
+            query_params = []
+            for k, v in params.items():
+                query_params.append(f"{k}={v}")
+            query_string = '&'.join(query_params)
+            # Construct full URL with query string
+            url = f"{url}?{query_string}"
         
         if data:
-            body = json.dumps(data)
+            body = json.dumps(data, separators=(',', ':'))  # Compact JSON format
         
-        # Generate signature
+        # Generate signature - query_string should NOT include the '?' for signature
         signature, timestamp = self._generate_signature(method, endpoint, query_string, body)
         
         # Prepare headers
@@ -90,7 +96,8 @@ class DeltaExchangeClient:
         
         try:
             if method == 'GET':
-                response = self.session.get(url, headers=headers, params=params)
+                # Use the full URL with query string, no separate params
+                response = self.session.get(url, headers=headers)
             elif method == 'POST':
                 response = self.session.post(url, headers=headers, json=data)
             elif method == 'DELETE':
@@ -121,19 +128,26 @@ class DeltaExchangeClient:
         """
         return self._make_request('GET', '/v2/wallet/balances')
     
-    def get_positions(self, product_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    def get_positions(self, product_ids: Optional[List[int]] = None, 
+                     underlying_asset_symbol: Optional[str] = None) -> Dict[str, Any]:
         """
         Get current positions
         
         Args:
             product_ids: Optional list of product IDs to filter
+            underlying_asset_symbol: Optional underlying asset symbol to filter (e.g., "BTC")
             
         Returns:
             Positions data
         """
-        params = {}
+        params: Dict[str, Any] = {}
         if product_ids:
             params['product_ids'] = ','.join(map(str, product_ids))
+        elif underlying_asset_symbol:
+            params['underlying_asset_symbol'] = underlying_asset_symbol
+        else:
+            # If no filter provided, get all positions by using a common underlying asset
+            params['underlying_asset_symbol'] = 'BTC'
         
         return self._make_request('GET', '/v2/positions', params=params)
     
@@ -149,7 +163,7 @@ class DeltaExchangeClient:
         Returns:
             Orders data
         """
-        params = {'page_size': page_size}
+        params: Dict[str, Any] = {'page_size': page_size}
         if product_ids:
             params['product_ids'] = ','.join(map(str, product_ids))
         

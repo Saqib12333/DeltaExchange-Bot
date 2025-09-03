@@ -56,19 +56,19 @@ USE_TESTNET=true  # Set to false for production
 ```
 
 ### 4. Get Your API Keys
-1. Visit [Delta Exchange API Settings](https://www.delta.exchange/app/account/api)
+1. Visit [Delta Exchange India API Settings](https://www.delta.exchange/app/account/api)
 2. Create a new API key with appropriate permissions:
    - **Phase 1** (Monitoring): Read-only access
    - **Phase 2** (Trading): Read + Trade access
-3. Copy your API key and secret to the `.env` file
+3. **IMPORTANT**: Whitelist both your IPv4 and IPv6 addresses:
+   - Get IPv4: `curl https://api.ipify.org` 
+   - Get IPv6: `curl https://api6.ipify.org`
+4. Copy your API key and secret to the `.env` file
 
 ### 5. Run the Application
 ```bash
-# Automated setup (recommended)
-python setup.py
-
-# Or run directly
-streamlit run streamlit_app.py
+# Run the Streamlit dashboard
+streamlit run app.py
 ```
 
 ## 📱 Using the Dashboard
@@ -128,9 +128,8 @@ Always test your strategy thoroughly on testnet before switching to production!
 
 ```
 DeltaExchange-Bot/
-├── streamlit_app.py      # Main dashboard application
-├── delta_client.py       # Delta Exchange API client
-├── setup.py             # Automated setup script
+├── app.py               # Main dashboard application
+├── delta_client.py      # Delta Exchange API client
 ├── requirements.txt     # Python dependencies
 ├── .env.example        # Environment template
 ├── Stratergy/
@@ -171,6 +170,8 @@ DeltaExchange-Bot/
 **"Failed to connect to Delta Exchange API"**
 - Verify your API keys are correct and active
 - Check your internet connection
+- **IMPORTANT**: Ensure both your IPv4 and IPv6 addresses are whitelisted in Delta Exchange API settings
+- If using IP whitelisting, get your current IP with: `curl https://api.ipify.org` (IPv4) or `curl https://api6.ipify.org` (IPv6)
 - Ensure you're using the correct environment (testnet vs production)
 
 **"Invalid signature"**
@@ -198,7 +199,8 @@ We welcome contributions to improve the Delta Exchange Trading Bot! Here's how y
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature-name`
 3. Make your changes and test thoroughly
-4. Submit a pull request with a clear description
+4. Run the app: `streamlit run app.py`
+5. Submit a pull request with a clear description
 
 ### Areas for Contribution
 - Additional trading strategies

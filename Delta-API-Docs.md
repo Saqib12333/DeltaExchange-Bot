@@ -1,10 +1,12 @@
-# Delta Exchange API Documentation
+# Delta Exchange India API Documentation
+
+**Official Documentation**: https://docs.delta.exchange/
 
 ## Introduction
 
-Welcome to the Delta Exchange API! This documentation provides comprehensive information about our trading API, which allows programmatic access to Delta Exchange trading features.
+Welcome to the Delta Exchange India API! This documentation provides comprehensive information about our trading API, which allows programmatic access to Delta Exchange India trading features.
 
-Delta Exchange is a cryptocurrency derivatives exchange that offers trading in futures, options, and perpetual contracts. Our API provides:
+Delta Exchange India is a cryptocurrency derivatives exchange that offers trading in futures, options, and perpetual contracts. Our API provides:
 
 - Real-time market data access
 - Order management and trading
@@ -14,8 +16,16 @@ Delta Exchange is a cryptocurrency derivatives exchange that offers trading in f
 
 ## Base URLs
 
-- **Production**: `https://api.delta.exchange`
-- **Testnet**: `https://testnet-api.deltaex.org`
+### REST API
+- **Production**: `https://api.india.delta.exchange`
+- **Testnet**: `https://cdn-ind.testnet.deltaex.org`
+
+### WebSocket API
+- **Production**: `wss://socket.india.delta.exchange`
+- **Testnet**: `wss://socket-ind.testnet.deltaex.org`
+
+### Connection Limits
+- **WebSocket**: Maximum 150 connections every 5 minutes per IP address
 
 ## API Versions
 
@@ -37,24 +47,29 @@ API rate limits vary by endpoint and user tier. Please refer to the specific end
 
 ### Symbology
 
-Delta Exchange uses a standardized symbology for different product types:
+Delta Exchange India uses a standardized symbology for different product types:
+
+#### Format Structure
+**General Format**: `Underlying Asset|Quoting Asset|_|Maturity Date (optional)`
 
 #### Perpetual Futures
-Format: `{UNDERLYING}{QUOTE}` (e.g., "BTCUSD", "ETHUSD")
+Format: `{UNDERLYING}|{QUOTE}` (e.g., "BTC|USD", "ETH|USD")
 
 #### Futures
-Format: `{UNDERLYING}-{EXPIRY}` (e.g., "BTC-310325" for Bitcoin futures expiring March 31, 2025)
+Format: `{UNDERLYING}|{QUOTE}|_|{MATURITY}` where MATURITY uses format DDMMMYY
+Examples:
+- `BTC|USD|_|31JAN24`: Bitcoin futures expiring January 31, 2024
+- `ETH|USD|_|28FEB24`: Ethereum futures expiring February 28, 2024
 
 #### Options
-Format: `{TYPE}-{UNDERLYING}-{STRIKE}-{EXPIRY}` where:
+Format: `{UNDERLYING}|{QUOTE}|_|{STRIKE}|{TYPE}|{EXPIRY}` where:
 - TYPE: "C" for calls, "P" for puts
-- UNDERLYING: Base asset (e.g., "BTC", "ETH")
 - STRIKE: Strike price
-- EXPIRY: Expiration date in DDMMYY format
+- EXPIRY: Expiration date in DDMMMYY format
 
 Examples:
-- `C-BTC-50000-310325`: Bitcoin call option, strike $50,000, expires March 31, 2025
-- `P-ETH-3000-280225`: Ethereum put option, strike $3,000, expires February 28, 2025
+- `BTC|USD|_|50000|C|31JAN24`: Bitcoin call option, strike $50,000, expires January 31, 2024
+- `ETH|USD|_|3000|P|28FEB24`: Ethereum put option, strike $3,000, expires February 28, 2024
 
 ### Timestamps
 
@@ -173,7 +188,7 @@ Common authentication errors:
 
 Retrieve a list of all available trading products.
 
-**Endpoint:** `GET /products`
+**Endpoint:** `GET /v2/products`
 
 **Parameters:**
 
@@ -202,22 +217,24 @@ Retrieve a list of all available trading products.
       "contract_value": "0.001",
       "contract_unit_currency": "BTC",
       "tick_size": "0.5",
-      "product_specs": {
-        "underlying_asset": {
-          "id": 1,
-          "symbol": "BTC",
-          "precision": 8
-        },
-        "quoting_asset": {
-          "id": 3,
-          "symbol": "USD",
-          "precision": 2
-        },
-        "settling_asset": {
-          "id": 1,
-          "symbol": "BTC", 
-          "precision": 8
-        }
+      "underlying_asset": {
+        "id": 1,
+        "symbol": "BTC",
+        "precision": 8
+      },
+      "quoting_asset": {
+        "id": 3,
+        "symbol": "USD",
+        "precision": 2
+      },
+      "settling_asset": {
+        "id": 1,
+        "symbol": "BTC", 
+        "precision": 8
+      },
+      "spot_index": {
+        "id": 1,
+        "symbol": "BTC-INDEX"
       },
       "state": "live",
       "trading_status": "operational",
@@ -256,7 +273,7 @@ Retrieve a list of all available trading products.
 
 Retrieve details for a specific product by its symbol.
 
-**Endpoint:** `GET /products/{symbol}`
+**Endpoint:** `GET /v2/products/{symbol}`
 
 **Parameters:**
 
@@ -270,7 +287,7 @@ Retrieve details for a specific product by its symbol.
 
 Retrieve the current orderbook for a product.
 
-**Endpoint:** `GET /products/{symbol}/orders`
+**Endpoint:** `GET /v2/products/{symbol}/orders`
 
 **Parameters:**
 
@@ -311,7 +328,7 @@ Retrieve the current orderbook for a product.
 
 Create a new order.
 
-**Endpoint:** `POST /orders`
+**Endpoint:** `POST /v2/orders`
 
 **Request Body:**
 
@@ -390,7 +407,7 @@ Create a new order.
 
 Retrieve orders for the authenticated user.
 
-**Endpoint:** `GET /orders`
+**Endpoint:** `GET /v2/orders`
 
 **Parameters:**
 
@@ -446,7 +463,7 @@ Retrieve orders for the authenticated user.
 
 Cancel an existing order.
 
-**Endpoint:** `DELETE /orders/{order_id}`
+**Endpoint:** `DELETE /v2/orders/{order_id}`
 
 **Parameters:**
 
@@ -471,7 +488,7 @@ Cancel an existing order.
 
 Cancel all open orders for specified products.
 
-**Endpoint:** `DELETE /orders/all`
+**Endpoint:** `DELETE /v2/orders/all`
 
 **Request Body:**
 
@@ -511,7 +528,7 @@ Cancel all open orders for specified products.
 
 Retrieve account balance and wallet information.
 
-**Endpoint:** `GET /wallet/balances`
+**Endpoint:** `GET /v2/wallet/balances`
 
 **Response:**
 
@@ -550,7 +567,7 @@ Retrieve account balance and wallet information.
 
 Retrieve current positions.
 
-**Endpoint:** `GET /positions`
+**Endpoint:** `GET /v2/positions`
 
 **Parameters:**
 
@@ -586,7 +603,7 @@ Retrieve current positions.
 
 Modify position margin.
 
-**Endpoint:** `POST /positions/change_margin`
+**Endpoint:** `POST /v2/positions/change_margin`
 
 **Request Body:**
 
@@ -639,7 +656,7 @@ All Deadman Switch endpoints require authentication. Include your API key and si
 
 Creates a new heartbeat with specific configuration for automatic actions.
 
-**Endpoint:** `POST /heartbeat/create`
+**Endpoint:** `POST /v2/heartbeat/create`
 
 **Request Body:**
 
@@ -695,7 +712,7 @@ Creates a new heartbeat with specific configuration for automatic actions.
 
 Sends an acknowledgment to keep the heartbeat active. Set ttl to 0 to disable heartbeat.
 
-**Endpoint:** `POST /heartbeat`
+**Endpoint:** `POST /v2/heartbeat`
 
 **Request Body:**
 
@@ -729,7 +746,7 @@ Sends an acknowledgment to keep the heartbeat active. Set ttl to 0 to disable he
 
 Retrieves all active heartbeats for a user.
 
-**Endpoint:** `GET /heartbeat`
+**Endpoint:** `GET /v2/heartbeat`
 
 **Query Parameters:**
 
@@ -929,7 +946,7 @@ deadman.startHeartbeatLoop();
 
 Retrieve settlement prices for expired contracts.
 
-**Endpoint:** `GET /settlement_prices`
+**Endpoint:** `GET /v2/settlement_prices`
 
 **Parameters:**
 
@@ -961,7 +978,7 @@ Retrieve settlement prices for expired contracts.
 
 Retrieve historical OHLC (Open, High, Low, Close) candlestick data.
 
-**Endpoint:** `GET /history/candles`
+**Endpoint:** `GET /v2/history/candles`
 
 **Parameters:**
 
