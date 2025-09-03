@@ -1,10 +1,6 @@
-pydantic==2.8.2
-pyyaml==6.0.2
-requests==2.32.3
-python-dotenv==1.0.1
-loguru==0.7.2
-tenacity==9.0.0
-# Primary SDK
-delta-rest-client==1.0.13
-# Dev/testing
-pytest==8.2.0
+streamlit
+requests
+python-dotenv
+pandas
+plotly
+cryptography

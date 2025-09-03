@@ -1,95 +1,270 @@
-# Haider Grid Trading Bot — Delta Exchange (MVP)
+# 🚀 Delta Exchange Trading Bot
 
-Deterministic, limit-only bot that implements the "Haider" pyramid/flip strategy on Delta Exchange. The MVP ships with a 24/7 runner CLI and order-sync logic. Start on Demo (testnet) before Live.
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Streamlit](https://img.shields.io/badge/streamlit-1.0+-red.svg)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Quick Start
+A powerful cryptocurrency trading automation system for Delta Exchange India, featuring real-time portfolio monitoring and automated strategy execution.
 
-1) Python & virtualenv
+![Dashboard Preview](https://via.placeholder.com/800x400/1f77b4/ffffff?text=Delta+Exchange+Dashboard)
 
-```powershell
-py -m venv venv
-./venv/Scripts/python.exe -m pip install -r requirements.txt
+## ✨ Features
+
+### 📊 **Real-Time Portfolio Dashboard**
+- **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
+- **Position Tracking** - View open positions with P&L calculations and liquidation prices
+- **Order Management** - Track all open orders with detailed status information
+- **Mark Price Monitoring** - Real-time price feeds for major cryptocurrency pairs
+- **Modern UI** - Beautiful, responsive interface with auto-refresh capabilities
+
+### 🤖 **Automated Trading Strategy**
+- **Haider Strategy** - Advanced averaging and take-profit system
+- **Risk Management** - Built-in position size limits and distance constraints
+- **State Tracking** - Intelligent order management with automatic state transitions
+- **Testnet Support** - Safe testing environment before live trading
+
+### 🔒 **Security & Reliability**
+- **Secure Authentication** - HMAC-SHA256 signature-based API authentication
+- **Environment Isolation** - Separate testnet and production configurations
+- **Comprehensive Logging** - Full audit trail of all trading activities
+- **Error Handling** - Robust error management and recovery mechanisms
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.8 or higher
+- Delta Exchange account with API access
+- Basic knowledge of cryptocurrency trading
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/Saqib12333/DeltaExchange-Bot.git
+cd DeltaExchange-Bot
 ```
 
-2) Configure environment
-
-- Copy `.env.example` to `.env` and fill in your keys. For Live, set:
-
-```
-API_KEY=your_live_key
-API_SECRET=your_live_secret
-DELTA_BASE_URL=https://api.india.delta.exchange
-LOG_LEVEL=INFO
-SYMBOL=BTCUSD
-ENV_LABEL=LIVE
+### 2. Install Dependencies
+```bash
+pip install -r requirements.txt
 ```
 
-- For Demo/Testnet use:
-
-```
-DELTA_BASE_URL=https://cdn-ind.testnet.deltaex.org
-```
-
-- Ensure your API key has Trading permission and (if required) your machine's IP is whitelisted on Delta.
-
-3) Connectivity smoke test (no orders)
-
-```powershell
-./venv/Scripts/python.exe starter.py BTCUSD
+### 3. Configure Environment
+Create a `.env` file in the project root:
+```env
+DELTA_API_KEY=your_api_key_here
+DELTA_API_SECRET=your_api_secret_here
+USE_TESTNET=true  # Set to false for production
 ```
 
-4) Place a tiny seed order (post-only, 1 contract)
+### 4. Get Your API Keys
+1. Visit [Delta Exchange API Settings](https://www.delta.exchange/app/account/api)
+2. Create a new API key with appropriate permissions:
+   - **Phase 1** (Monitoring): Read-only access
+   - **Phase 2** (Trading): Read + Trade access
+3. Copy your API key and secret to the `.env` file
 
-```powershell
-./venv/Scripts/python.exe starter.py BTCUSD --place --side buy --size 1
+### 5. Run the Application
+```bash
+# Automated setup (recommended)
+python setup.py
+
+# Or run directly
+streamlit run streamlit_app.py
 ```
 
-If this succeeds, your keys/network/time are set up correctly. For demo instability on private writes, add `--retry`.
+## 📱 Using the Dashboard
 
-5) Run the bot (MVP runtime)
+### Connection Status
+The dashboard will automatically test your API connection and display the status. Ensure you see a green "Connected" indicator before proceeding.
 
-```powershell
-./venv/Scripts/python.exe -m haider_bot.main status --config haider_bot/config.yaml
-# then start the loop (Ctrl+C to stop)
-./venv/Scripts/python.exe -m haider_bot.main run --config haider_bot/config.yaml
+### Portfolio Overview
+- **Account Balance**: View your available and total balances across all assets
+- **Positions**: Monitor open positions with real-time P&L calculations
+- **Orders**: Track pending orders and their current status
+- **Mark Prices**: Live price feeds for major trading pairs
+
+### Auto-Refresh
+Enable auto-refresh in the sidebar to keep your data updated automatically. You can configure the refresh interval from 10 seconds to 5 minutes.
+
+## 🎯 Trading Strategy: "Haider Strategy"
+
+The bot implements a sophisticated averaging and take-profit system designed for BTCUSD futures trading:
+
+### Strategy Overview
+- **Initial Position**: Start with 1 lot (0.001 BTC) in either LONG or SHORT direction
+- **Dual Order System**: Always maintain exactly 2 orders (take-profit + averaging)
+- **Progressive Scaling**: Scale positions through 1 → 3 → 9 → 27 lots
+- **Fixed Distances**: Predetermined price offsets for optimal risk management
+
+### Risk Management
+- **Maximum Position**: Capped at 27 lots (0.027 BTC)
+- **Take-Profit Levels**: 300 → 200 → 100 → 50 USD offsets
+- **Averaging Distances**: 750 USD initial, then 500 USD intervals
+- **Immediate Cancellation**: Cancel paired orders upon any fill to maintain strategy integrity
+
+### Strategy States
+1. **Seed (1 lot)**: Initial position with TP at ±300 and averaging at ±750
+2. **First Average (3 lots)**: TP at ±200, next averaging at -500 from first
+3. **Second Average (9 lots)**: TP at ±100, final averaging at -500 from second
+4. **Maximum (27 lots)**: Final TP at ±50, no further averaging
+
+## 🔧 Configuration
+
+### Environment Variables
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DELTA_API_KEY` | Your Delta Exchange API key | Required |
+| `DELTA_API_SECRET` | Your Delta Exchange API secret | Required |
+| `USE_TESTNET` | Use testnet environment | `true` |
+| `DELTA_BASE_URL` | Production API URL | `https://api.delta.exchange` |
+| `TESTNET_API_URL` | Testnet API URL | `https://testnet-api.deltaex.org` |
+
+### Testnet vs Production
+- **Testnet**: Safe environment for testing strategies without real money
+- **Production**: Live trading with real funds (requires extra caution)
+
+Always test your strategy thoroughly on testnet before switching to production!
+
+## 📊 Project Structure
+
+```
+DeltaExchange-Bot/
+├── streamlit_app.py      # Main dashboard application
+├── delta_client.py       # Delta Exchange API client
+├── setup.py             # Automated setup script
+├── requirements.txt     # Python dependencies
+├── .env.example        # Environment template
+├── Stratergy/
+│   └── stratergy.md    # Detailed strategy specification
+└── .github/
+    └── copilot-instructions.md  # Development guidelines
 ```
 
-## Project Layout
+## 🛡️ Security Best Practices
 
-- `haider_bot/adapters/delta_adapter.py` — Thin REST adapter with HMAC auth.
-- `haider_bot/core/strategy.py` — Pure functions for seed/TP/AVG intents.
-- `haider_bot/main.py` — CLI and 24/7 runner (status/run/cancel-all).
-- `haider_bot/utils.py` — Time, ID generation, rounding.
-- `starter.py` — Connectivity/order sanity check script for demo.
-- `.github/instructions/AGENT.instructions.md` — Engineering guide for devs and AI agents.
+### API Key Management
+- Never commit your actual API keys to version control
+- Use environment variables for all sensitive data
+- Regularly rotate your API keys
+- Grant minimum required permissions
 
-Upcoming modules (planned):
+### Trading Safety
+- Always start with testnet to understand the system
+- Set appropriate position size limits
+- Monitor your trades regularly
+- Have a plan for emergency situations
 
-- `oms.py`, `state_machine.py`, `persistence.py`, `main.py` CLI, and tests.
+### Production Checklist
+- [ ] API keys configured with correct permissions
+- [ ] Strategy parameters validated on testnet
+- [ ] Risk management rules understood
+- [ ] Monitoring setup in place
+- [ ] Emergency stop procedures defined
 
-## Configuration
+## 🐛 Troubleshooting
 
-Primary runtime config lives in `haider_bot/config.yaml` and environment variables in `.env`.
+### Common Issues
 
-- Base URL: `exchange.base_url` (or `DELTA_BASE_URL`) controls REST host. On transient 5xx from the configured host for private endpoints, the adapter will retry once using `DELTA_ALT_BASE_URL` if set (defaults to the global testnet host).
-	- For an offline demo, you can set `DELTA_BASE_URL=mock://demo` to use the built-in mock adapter. This lets you run `status`/`run`/`starter.py` without hitting the network.
-- Symbol: `exchange.symbol` (default BTCUSD).
-- Polling and execution: `exchange.poll_interval_ms`, `exchange.use_post_only`, `exchange.price_shade_ticks`.
-- Leverage: `sizing.leverage` is set via API at startup.
+**"API credentials not found"**
+- Verify your `.env` file exists and contains valid API keys
+- Check that variable names match exactly: `DELTA_API_KEY`, `DELTA_API_SECRET`
 
-## Safety Notes
+**"Failed to connect to Delta Exchange API"**
+- Verify your API keys are correct and active
+- Check your internet connection
+- Ensure you're using the correct environment (testnet vs production)
 
-- No stop-loss by design. Strategy can accumulate large unrealized drawdowns.
-- Point `DELTA_BASE_URL` to testnet until you fully validate behavior and risk. If you see 502s on private endpoints from the India testnet host, set `DELTA_ALT_BASE_URL=https://testnet-api.delta.exchange` to enable one-off fallback.
-- Never commit secrets. `.env` and variants are ignored via `.gitignore`.
+**"Invalid signature"**
+- Your API secret might be incorrect
+- Check for extra spaces or characters in your `.env` file
+- Regenerate your API keys if necessary
 
-## Troubleshooting
+**Dashboard not loading**
+- Ensure all dependencies are installed: `pip install -r requirements.txt`
+- Check Python version (requires 3.8+)
+- Try running `streamlit --version` to verify Streamlit installation
 
-- 404 on product endpoint: ensure adapter uses `GET /v2/products/{symbol}` and you used a valid symbol (e.g., `BTCUSD`).
-- SignatureExpired: keep system time in sync; Delta requires timestamp within ~5 seconds.
-- UnauthorizedApiAccess: check API key permissions (Read/Trading) and IP whitelist.
-- Rate limited (429): back off and retry; reduce request frequency.
+### Getting Help
 
-## License
+1. Check the [Issues](https://github.com/Saqib12333/DeltaExchange-Bot/issues) page for known problems
+2. Review the detailed strategy documentation in `Stratergy/stratergy.md`
+3. Enable debug logging to get more detailed error information
+4. Create a new issue with detailed error messages and steps to reproduce
 
-For internal/demo use. No warranty. Use at your own risk.
+## 🤝 Contributing
+
+We welcome contributions to improve the Delta Exchange Trading Bot! Here's how you can help:
+
+### Development Setup
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and test thoroughly
+4. Submit a pull request with a clear description
+
+### Areas for Contribution
+- Additional trading strategies
+- Enhanced UI/UX features
+- Performance optimizations
+- Documentation improvements
+- Bug fixes and security enhancements
+
+### Code Standards
+- Follow PEP 8 Python style guidelines
+- Add docstrings for all functions and classes
+- Include unit tests for new features
+- Update documentation for any API changes
+
+## 📋 Roadmap
+
+### Phase 1: Portfolio Monitoring ✅
+- [x] Real-time dashboard
+- [x] API integration
+- [x] Position and order tracking
+- [x] Mark price monitoring
+
+### Phase 2: Strategy Automation 🚧
+- [ ] Automated order placement
+- [ ] Strategy state machine implementation
+- [ ] WebSocket integration for real-time updates
+- [ ] Position state persistence
+
+### Phase 3: Advanced Features 📋
+- [ ] Multiple strategy support
+- [ ] Backtesting capabilities
+- [ ] Performance analytics
+- [ ] Mobile-responsive design
+- [ ] Telegram/Discord notifications
+
+## ⚠️ Disclaimer
+
+**IMPORTANT: This software is for educational and research purposes. Cryptocurrency trading involves significant financial risk.**
+
+- **No Financial Advice**: This bot does not provide financial advice
+- **Use at Your Own Risk**: You are responsible for all trading decisions
+- **Test Thoroughly**: Always test strategies on testnet first
+- **Monitor Actively**: Automated trading requires supervision
+- **Risk Management**: Never risk more than you can afford to lose
+
+The developers are not responsible for any financial losses incurred while using this software.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [Delta Exchange](https://www.delta.exchange/) for providing the trading platform and API
+- [Streamlit](https://streamlit.io/) for the amazing dashboard framework
+- [Plotly](https://plotly.com/) for beautiful data visualizations
+- The cryptocurrency trading community for strategy insights
+
+---
+
+<div align="center">
+
+**⭐ Star this repository if you find it helpful!**
+
+[Report Bug](https://github.com/Saqib12333/DeltaExchange-Bot/issues) • [Request Feature](https://github.com/Saqib12333/DeltaExchange-Bot/issues) • [Documentation](https://github.com/Saqib12333/DeltaExchange-Bot/wiki)
+
+Made with ❤️ for the crypto trading community
+
+</div>
