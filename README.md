@@ -161,12 +161,35 @@ Always test your strategy thoroughly on testnet before switching to production!
 DeltaExchange-Bot/
 ├── app.py               # Main dashboard application
 ├── delta_client.py      # Delta Exchange API client
+├── ws_client.py         # WebSocket client for mark_price feed (WS-first pricing)
 ├── requirements.txt     # Python dependencies
 ├── Delta-API-Docs.md    # API reference snapshot
 ├── Stratergy/
 │   └── stratergy.md    # Detailed strategy specification
 └── .github/
     └── copilot-instructions.md  # Development guidelines
+```
+
+## 🔌 WebSocket client (ws_client.py)
+
+This lightweight client consumes Delta’s public mark_price channel and powers the WS‑first BTCUSD price path in the app.
+
+- Endpoints:
+   - Production: wss://socket.india.delta.exchange
+   - Testnet: wss://socket-ind.testnet.deltaex.org
+- Symbols: subscribe using plain symbols (e.g., "BTCUSD"); the client adds the MARK: prefix.
+- Thread-safety: `get_latest_mark(symbol)` is lock-protected; a backward-compatible alias `get_latest_mark_price()` is also available.
+- Lifecycle: The app manages a cached singleton and auto-subscribes to BTCUSD. If you instantiate manually, remember to call `close()` when done.
+
+Example (standalone):
+
+```python
+from ws_client import DeltaWSClient
+
+ws = DeltaWSClient(use_testnet=True).connect()
+ws.subscribe_mark(["BTCUSD"])  # Client will send MARK:BTCUSD under the hood
+price = ws.get_latest_mark("BTCUSD")
+ws.close()
 ```
 
 ## 🛡️ Security Best Practices
@@ -309,3 +332,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 Made with ❤️ for the crypto trading community
 
 </div>
+
+## 👤 About the Owner
+
+<p align="left">
+   <img src="https://github.com/Saqib12333.png?size=200" alt="Saqib Sherwani" width="120" height="120" style="border-radius: 50%; margin-right: 12px;" />
+</p>
+
+- Name: Saqib Sherwani
+- GitHub: https://github.com/Saqib12333
+- Email: sherwanisaqib@gmail.com
+- Ownership: Sole owner and maintainer of this project

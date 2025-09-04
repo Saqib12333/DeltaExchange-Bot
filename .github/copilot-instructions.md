@@ -6,6 +6,7 @@ Version: 3.0.2
 This is a **cryptocurrency trading automation system** for Delta Exchange India, consisting of:
 - **Streamlit Dashboard** (`app.py`) - Real-time portfolio monitoring with fixed 1s auto-refresh (no manual controls)
 - **API Client** (`delta_client.py`) - Delta Exchange REST API wrapper with fixed authentication and rate limiting
+- **WebSocket Client** (`ws_client.py`) - Public mark_price channel client backing WS‑first pricing
 - **Trading Strategy** (`Stratergy/stratergy.md`) - Formal specification for "Haider Strategy" automation
 - **Environment Management** (`.env`) - API credentials and configuration
 
@@ -134,10 +135,28 @@ mark_data = client.get_mark_price('BTCUSD')  # Returns real mark price
 ## Critical Files & Responsibilities
 
 - **`delta_client.py`**: API abstraction layer with fixed authentication - modify for new endpoints
+- **`ws_client.py`**: Minimal WebSocket client for mark_price; provides `connect()`, `subscribe_mark(["BTCUSD"])`, `get_latest_mark("BTCUSD")`, and `close()`; auto‑reconnect loop with ping
 - **`app.py`**: UI components with 1-second auto-refresh - extend for new visualizations  
 - **`Stratergy/stratergy.md`**: Strategy specification - reference for automation logic
 - **`Delta-API-Docs.md`**: Complete API reference - consult for new integrations
 - **`.env`**: Runtime configuration - never commit with real credentials
+
+### WebSocket details
+- URLs: prod `wss://socket.india.delta.exchange`, testnet `wss://socket-ind.testnet.deltaex.org`
+- Subscription payload uses `MARK:BTCUSD` symbols; helper accepts `"BTCUSD"` and prefixes internally
+- Thread-safe latest mark store; alias `get_latest_mark_price()` retained for compatibility
+- Use a cached singleton in Streamlit to avoid multiple connections per rerun
+
+Example pattern (matches app):
+```python
+@st.cache_resource
+def get_ws_client(base_url: str):
+    use_testnet = 'testnet' in base_url.lower()
+    ws = DeltaWSClient(use_testnet=use_testnet)
+    ws.connect()
+    ws.subscribe_mark(["BTCUSD"])
+    return ws
+```
 
 ## Official Documentation
 
@@ -230,3 +249,14 @@ When implementing Phase 2 automation:
 - Mark price via WebSocket; REST candles as fallback
 - Dashboard refresh: fixed 1-second cadence with caching
 - Built-in request throttling and timeouts
+
+## Maintainer and Ownership
+
+<p align="left">
+    <img src="https://github.com/Saqib12333.png?size=200" alt="Saqib Sherwani" width="120" height="120" style="border-radius: 50%; margin-right: 12px;" />
+</p>
+
+- Name: Saqib Sherwani
+- GitHub: https://github.com/Saqib12333
+- Email: sherwanisaqib@gmail.com
+- Ownership: Sole owner and maintainer of this repository and all included code
