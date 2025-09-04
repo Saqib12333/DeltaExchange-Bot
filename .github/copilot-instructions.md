@@ -1,8 +1,8 @@
 # Delta Exchange Bot — AI Agent Guide
-Version: 3.0.2
+Version: 3.1.0
 
 ## Big picture
-- Streamlit dashboard (`app.py`, root) reads from REST + WebSocket clients in `src/`.
+- Streamlit dashboard (`app.py`, root) reads from REST + WebSocket clients in `src/` and includes maker-only order placement and per-order cancel.
 - REST client: `src/delta_client.py` (HMAC auth fixed; rate-limited; JSON errors preserved).
 - WS client: `src/ws_client.py` (public `mark_price` feed; WS-first pricing with REST fallback).
 - Docs: `docs/Delta-API-Docs.md`, `docs/strategy/stratergy.md`, `docs/notes/issues.md`.
@@ -11,7 +11,7 @@ Version: 3.0.2
 ## Runbook (Windows PowerShell)
 - Environment: `.env` in repo root (DELTA_API_KEY/SECRET, USE_TESTNET, DELTA_BASE_URL, TESTNET_API_URL, DELTA_DEBUG_AUTH).
 - Install: `pip install -r requirements.txt` (uses `websocket-client`, `streamlit`, etc.).
-- Run: `streamlit run app.py` (auto-refresh 1s; no manual toggles).
+- Run: `streamlit run app.py` (auto-refresh 1s; no manual toggles). .env is loaded by default; production is the default unless `USE_TESTNET=true`.
 - Imports in `app.py` use the new paths: `from src.delta_client import DeltaExchangeClient`, `from src.ws_client import DeltaWSClient`.
 
 ## Integration patterns that matter

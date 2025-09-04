@@ -103,7 +103,7 @@ class DeltaExchangeClient:
         url = f"{self.base_url}{endpoint}"
         query_string = ''
         body = ''
-        
+
         if params:
             # Properly format query string for Delta API
             query_params = []
@@ -112,22 +112,26 @@ class DeltaExchangeClient:
             # Build query pieces in insertion order
             query_string = '&'.join(query_params)
             # For URL construction: include the '?' character
-            url = f"{url}?" + query_string
-        
-        if data:
-            body = json.dumps(data, separators=(',', ':'))  # Compact JSON format
-        
+            url = f"{url}?{query_string}"
+
+        # Prepare body exactly once and reuse for signing AND sending
+        if data is not None:
+            # Use compact JSON so we can sign and send the exact same bytes
+            body = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+
         # Determine if this endpoint is public (no auth headers needed)
         is_public_get = (
             method == 'GET' and (
                 endpoint.startswith('/v2/products') or
                 endpoint.startswith('/v2/history') or
-                endpoint.endswith('/orders') and '/v2/products/' in endpoint  # product orderbook
+                (endpoint.endswith('/orders') and '/v2/products/' in endpoint)  # product orderbook
             )
         )
 
         headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            # Provide a stable UA to avoid occasional CDN 4xx blocks
+            'User-Agent': 'DeltaBot/3.0 maker-tester'
         }
 
         # Only sign/authenticate non-public endpoints
@@ -138,36 +142,40 @@ class DeltaExchangeClient:
                 'signature': signature,
                 'timestamp': timestamp,
             })
-        
+
         try:
             if method == 'GET':
                 # Use the full URL with query string, no separate params
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
             elif method == 'POST':
-                response = self.session.post(url, headers=headers, json=data, timeout=self.timeout)
+                # Send the exact JSON string we signed to avoid signature mismatch
+                response = self.session.post(url, headers=headers, data=body if body else None, timeout=self.timeout)
             elif method == 'DELETE':
-                # Send JSON body for DELETE when provided
-                if data:
-                    response = self.session.delete(url, headers=headers, json=data, timeout=self.timeout)
+                # Send the exact JSON string we signed (if any)
+                if data is not None and body:
+                    response = self.session.delete(url, headers=headers, data=body, timeout=self.timeout)
                 else:
                     response = self.session.delete(url, headers=headers, timeout=self.timeout)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
             response.raise_for_status()
             return response.json()
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.error(f"API request failed: {e}")
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            text = None
             if hasattr(e, 'response') and e.response is not None:
                 try:
                     error_data = e.response.json()
                     self.logger.error(f"Error details: {error_data}")
-                    return {'success': False, 'error': error_data}
-                except:
-                    self.logger.error(f"Response content: {e.response.text}")
-                    return {'success': False, 'error': str(e)}
-            return {'success': False, 'error': str(e)}
+                    return {'success': False, 'status': status, 'error': error_data}
+                except Exception:
+                    text = e.response.text
+                    self.logger.error(f"Response content: {text}")
+                    return {'success': False, 'status': status, 'error': text}
+            return {'success': False, 'status': status, 'error': str(e)}
     
     @rate_limit(calls_per_second=5)
     def get_account_balance(self) -> Dict[str, Any]:
@@ -204,19 +212,21 @@ class DeltaExchangeClient:
         return self._make_request('GET', '/v2/positions', params=params)
     
     @rate_limit(calls_per_second=5)
-    def get_orders(self, product_ids: Optional[List[int]] = None, 
-                   page_size: int = 100) -> Dict[str, Any]:
+    def get_orders(self, product_ids: Optional[List[int]] = None,
+                   page_size: int = 100,
+                   state: str = 'open') -> Dict[str, Any]:
         """
-        Get open orders
-        
+        Get orders (defaults to only 'open')
+
         Args:
             product_ids: Optional list of product IDs to filter
             page_size: Number of orders per page
-            
+            state: Filter by state (e.g., 'open', 'filled', 'cancelled'). Default 'open'.
+
         Returns:
             Orders data
         """
-        params: Dict[str, Any] = {'page_size': page_size}
+        params: Dict[str, Any] = {'page_size': page_size, 'state': state}
         if product_ids:
             params['product_ids'] = ','.join(map(str, product_ids))
         
@@ -379,17 +389,50 @@ class DeltaExchangeClient:
         
         return self._make_request('POST', '/v2/orders', data=data)
     
-    def cancel_order(self, order_id: int) -> Dict[str, Any]:
+    def cancel_order(self, order_id: int, *, product_id: Optional[int] = None, product_symbol: Optional[str] = None) -> Dict[str, Any]:
         """
         Cancel an order
         
         Args:
             order_id: Order ID to cancel
+            product_id: Optional product id (used for batch fallback)
+            product_symbol: Optional product symbol (used for batch fallback)
             
         Returns:
             Cancellation response
         """
-        return self._make_request('DELETE', f'/v2/orders/{order_id}')
+        # Primary: path parameter form (as per docs)
+        result = self._make_request('DELETE', f'/v2/orders/{order_id}')
+        if isinstance(result, dict) and result.get('success'):
+            return result
+
+        status = None
+        err_txt = ''
+        if isinstance(result, dict):
+            status = result.get('status')
+            err_txt = str(result.get('error'))
+
+        # Fallback 1: query param form DELETE /v2/orders?id=...
+        if status == 404 or 'Not Found' in err_txt:
+            qp = {'id': order_id}
+            alt_q = self._make_request('DELETE', '/v2/orders', params=qp)
+            if isinstance(alt_q, dict) and alt_q.get('success'):
+                alt_q['note'] = 'cancel via query id'
+                return alt_q
+
+        # Fallback 2: batch endpoint with product context if available
+        if product_id or product_symbol:
+            payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
+            if product_id:
+                payload['product_id'] = product_id
+            elif product_symbol:
+                payload['product_symbol'] = product_symbol
+            alt_b = self._make_request('DELETE', '/v2/orders/batch', data=payload)
+            if isinstance(alt_b, dict) and alt_b.get('success'):
+                alt_b['note'] = 'cancel via batch'
+                return alt_b
+
+        return result
     
     def cancel_all_orders(self, product_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """

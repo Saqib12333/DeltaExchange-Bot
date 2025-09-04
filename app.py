@@ -12,6 +12,7 @@ from src.delta_client import DeltaExchangeClient
 from src.ws_client import DeltaWSClient
 import json
 import logging
+from typing import Optional
 
 # Load environment variables
 load_dotenv()
@@ -229,6 +230,17 @@ def display_account_balance(client):
     else:
         st.warning("Unable to fetch balance data.")
 
+def _get_product_id(client: DeltaExchangeClient, symbol: str) -> Optional[int]:
+    """Resolve product id for a given symbol via REST."""
+    data = safe_api_call(client.get_product_by_symbol, symbol)
+    if isinstance(data, dict) and data.get("success") and data.get("result"):
+        result = data["result"]
+        if isinstance(result, dict):
+            return result.get("id")
+        if isinstance(result, list) and result:
+            return result[0].get("id")
+    return None
+
 def calculate_position_pnl(entry_price, current_price, size, contract_value=0.001):
     """Calculate unrealized PnL for a position"""
     if not current_price or current_price <= 0 or not entry_price or entry_price <= 0:
@@ -391,73 +403,100 @@ def display_positions(client, ws_client=None):
 @st.cache_data(ttl=5)  # Cache orders for 5 seconds
 def get_cached_orders(_client):
     """Get cached orders"""
-    return safe_api_call(_client.get_orders)
+    # Fetch only open orders to avoid stale/uncancelable IDs
+    return safe_api_call(_client.get_orders, state='open')
 
 def display_orders(client):
-    """Display current orders"""
+    """Display current open orders with per-order cancel buttons."""
     st.markdown("### 📋 Open Orders")
-    
+
     orders_data = get_cached_orders(client)
-    
-    if orders_data and orders_data.get('success'):
-        orders = orders_data.get('result', [])
-        
-        # Filter for open orders
-        open_orders = [order for order in orders if order.get('state') == 'open']
-        
-        if open_orders:
-            order_cards = []
-            
-            for order in open_orders:
-                symbol = order.get('product_symbol', 'Unknown')
-                size = float(order.get('size', 0))
-                unfilled_size = float(order.get('unfilled_size', 0))
-                side = order.get('side', 'Unknown').upper()
-                order_type = order.get('order_type', 'Unknown')
-                limit_price = order.get('limit_price')
-                created_at = order.get('created_at', '')
-                order_id = order.get('id', '')
-                
-                order_cards.append({
-                    'ID': order_id,
-                    'Symbol': symbol,
-                    'Side': side,
-                    'Type': order_type.replace('_', ' ').title(),
-                    'Size': size,
-                    'Unfilled': unfilled_size,
-                    'Limit Price': float(limit_price) if limit_price else None,
-                    'Created': created_at[:19] if created_at else 'Unknown'
-                })
-            
-            df_orders = pd.DataFrame(order_cards)
-            
-            # Display order cards
-            for _, row in df_orders.iterrows():
-                side_color = "#4CAF50" if row['Side'] == 'BUY' else "#f44336"
-                price_display = f"${row['Limit Price']:,.2f}" if row['Limit Price'] else 'Market'
-                
-                st.markdown(f"""
-                <div class="metric-card" style="border-left-color: {side_color};">
-                    <h4>{row['Symbol']} - {row['Side']} {row['Type']}</h4>
-                    <div style="display: flex; justify-content: space-between;">
-                        <div>
-                            <p><strong>Size:</strong> {row['Size']:.3f}</p>
-                            <p><strong>Unfilled:</strong> {row['Unfilled']:.3f}</p>
-                            <p><strong>Order ID:</strong> {row['ID']}</p>
-                        </div>
-                        <div style="text-align: right;">
-                            <p><strong>Price:</strong> {price_display}</p>
-                            <p><strong>Created:</strong> {row['Created']}</p>
-                        </div>
+    if not (orders_data and orders_data.get('success')):
+        st.warning("Unable to fetch orders data.")
+        return
+
+    open_orders = orders_data.get('result', []) or []
+    if not open_orders:
+        st.info("No open orders found.")
+        return
+
+    for order in open_orders:
+        symbol = order.get('product_symbol', 'Unknown')
+        size = float(order.get('size', 0))
+        unfilled_size = float(order.get('unfilled_size', 0))
+        side = (order.get('side') or 'unknown').upper()
+        order_type = (order.get('order_type') or 'unknown').replace('_', ' ').title()
+        limit_price = order.get('limit_price')
+        created_at = order.get('created_at') or ''
+        order_id = order.get('id')
+        product_id = order.get('product_id')
+
+        side_color = "#4CAF50" if side == 'BUY' else "#f44336"
+        price_display = f"${float(limit_price):,.2f}" if limit_price else 'Market'
+
+        with st.container():
+            st.markdown(f"""
+            <div class="metric-card" style="border-left-color: {side_color};">
+                <h4>{symbol} - {side} {order_type}</h4>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <p><strong>Size:</strong> {size:.3f}</p>
+                        <p><strong>Unfilled:</strong> {unfilled_size:.3f}</p>
+                        <p><strong>Order ID:</strong> {order_id}</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <p><strong>Price:</strong> {price_display}</p>
+                        <p><strong>Created:</strong> {created_at[:19] if created_at else 'Unknown'}</p>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
-            
-            # Table removed to avoid redundancy per issues.md
+            </div>
+            """, unsafe_allow_html=True)
+
+            cols = st.columns(2)
+            with cols[0]:
+                if st.button(f"Cancel {order_id}", key=f"cancel_{order_id}"):
+                    resp = client.cancel_order(int(order_id), product_id=product_id)
+                    if isinstance(resp, dict) and resp.get('success'):
+                        note = resp.get('note')
+                        st.success(f"Canceled {order_id}{' (' + note + ')' if note else ''}")
+                    else:
+                        st.error(f"Cancel failed: {resp}")
+            with cols[1]:
+                st.caption(created_at or '')
+
+def place_maker_only_order_ui(client):
+    """UI to place a maker-only limit order."""
+    st.markdown("### 🧩 Place Maker-Only Limit Order")
+    cols = st.columns(4)
+    with cols[0]:
+        symbol = st.text_input("Symbol", value="BTCUSD")
+    with cols[1]:
+        side = st.segmented_control("Side", options=["buy", "sell"], default="buy") or "buy"
+    with cols[2]:
+        lots = st.number_input("Lots", min_value=1, max_value=100000, value=1, step=1)
+    with cols[3]:
+        price = st.number_input("Limit Price (USD)", min_value=1.0, value=100000.0, step=1.0, format="%0.0f")
+
+    if st.button("Place Maker-Only Order", type="primary"):
+        pid = _get_product_id(client, symbol)
+        if not pid:
+            st.error(f"Couldn't resolve product id for {symbol}.")
         else:
-            st.info("No open orders found.")
-    else:
-        st.warning("Unable to fetch orders data.")
+            resp = client.place_order(
+                product_id=int(pid),
+                size=int(lots),
+                side=side,
+                order_type="limit_order",
+                limit_price=str(int(price)),
+                time_in_force="gtc",
+                post_only=True,
+                reduce_only=False,
+                client_order_id=f"app_maker_{int(time.time())}"
+            )
+            if isinstance(resp, dict) and resp.get('success'):
+                st.success("Order placed (post-only).")
+            else:
+                st.error(f"Order failed: {resp}")
 
 def main():
     """Main application"""
@@ -501,6 +540,8 @@ def main():
             display_positions(client, ws_client=get_ws_client(base_url))
         
         with col2:
+            place_maker_only_order_ui(client)
+            st.markdown("---")
             display_orders(client)
     
     st.markdown("---")

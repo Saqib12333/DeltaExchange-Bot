@@ -3,7 +3,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.0+-red.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-3.0.2-informational.svg)](#)
+[![Version](https://img.shields.io/badge/version-3.1.0-informational.svg)](#)
 
 A powerful cryptocurrency trading automation system for Delta Exchange India, featuring real-time portfolio monitoring and a planned automated strategy engine.
 
@@ -15,6 +15,7 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 - **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
 - **Position Tracking** - View open positions with accurate P&L calculations using real mark prices
 - **Order Management** - Track all open orders with properly formatted status information
+ - **Order Actions** - Place maker-only (post-only) limit orders and cancel specific open orders
 - **BTCUSD Mark Price** - Real-time accurate price monitoring with status indicators
 - **1s Auto-Refresh** - Fixed 1-second refresh cadence (no manual controls)
 - **WebSocket Mark Price** - Live WS feed for BTCUSD with REST candles as fallback
@@ -66,7 +67,7 @@ Create a `.env` file in the project root:
 ```env
 DELTA_API_KEY=your_api_key_here
 DELTA_API_SECRET=your_api_secret_here
-USE_TESTNET=true  # Set to false for production
+USE_TESTNET=false  # Default is production; set true to use testnet
 # Optionally override base URLs
 DELTA_BASE_URL=https://api.india.delta.exchange
 TESTNET_API_URL=https://cdn-ind.testnet.deltaex.org
@@ -103,6 +104,8 @@ The dashboard will automatically test your API connection and display the status
 - **Account Balance**: View your available and total balances across all assets
 - **Positions**: Monitor open positions with real-time P&L calculations using accurate mark prices
 - **Orders**: Track pending orders and their current status
+ - **Place Orders**: Use the “Place Maker-Only Limit Order” panel (side, lots, price)
+ - **Cancel Orders**: Cancel a specific open order with its card button (no bulk cancel)
 - **BTCUSD Mark Price**: Live price feed with status indicators (Live/Loading/Error)
 
 ### Refresh Behavior
@@ -161,7 +164,7 @@ Always test your strategy thoroughly on testnet before switching to production!
 
 ```
 DeltaExchange-Bot/
-├── app.py               # Main dashboard application
+├── app.py               # Main dashboard (place/cancel maker-only orders + portfolio)
 ├── src/
 │   ├── delta_client.py  # Delta Exchange REST API client
 │   └── ws_client.py     # WebSocket client for mark_price feed (WS-first pricing)
