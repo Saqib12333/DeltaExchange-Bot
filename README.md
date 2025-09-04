@@ -120,8 +120,10 @@ The dashboard will automatically test your API connection and display the status
 The bot implements a sophisticated averaging and take-profit system designed for BTCUSD futures trading:
 
 ### Strategy Overview
-- **Initial Position**: Start with 1 lot (0.001 BTC) in either LONG or SHORT direction
-- **Dual Order System**: Always maintain exactly 2 orders (take-profit + averaging)
+- **Seed (Startup) Invariant**: On start, there is already one open position of 1 lot at entry x, and two resting orders:
+   - Same-direction averaging: 2 lots at x ∓ 750 (LONG: x − 750; SHORT: x + 750)
+   - Opposite TP + Flip: 2 lots at x ± 300 (LONG: SHORT 2 at x + 300; SHORT: BUY 2 at x − 300)
+- **Dual Order System**: Always maintain exactly 2 orders (take-profit + averaging) until 27 lots
 - **Progressive Scaling**: Scale positions through 1 → 3 → 9 → 27 lots
 - **Fixed Distances**: Predetermined price offsets for optimal risk management
 
@@ -132,7 +134,7 @@ The bot implements a sophisticated averaging and take-profit system designed for
 - **Immediate Cancellation**: Cancel paired orders upon any fill to maintain strategy integrity
 
 ### Strategy States
-1. **Seed (1 lot)**: Initial position with TP at ±300 and averaging at ±750
+1. **Seed (1 lot)**: Existing 1-lot position at x with TP+Flip at ±300 and averaging at ∓750
 2. **First Average (3 lots)**: TP at ±200, next averaging at -500 from first
 3. **Second Average (9 lots)**: TP at ±100, final averaging at -500 from second
 4. **Maximum (27 lots)**: Final TP at ±50, no further averaging
@@ -160,17 +162,21 @@ Always test your strategy thoroughly on testnet before switching to production!
 ```
 DeltaExchange-Bot/
 ├── app.py               # Main dashboard application
-├── delta_client.py      # Delta Exchange API client
-├── ws_client.py         # WebSocket client for mark_price feed (WS-first pricing)
+├── src/
+│   ├── delta_client.py  # Delta Exchange REST API client
+│   └── ws_client.py     # WebSocket client for mark_price feed (WS-first pricing)
 ├── requirements.txt     # Python dependencies
-├── Delta-API-Docs.md    # API reference snapshot
-├── Stratergy/
-│   └── stratergy.md    # Detailed strategy specification
+├── docs/
+│   ├── Delta-API-Docs.md     # API reference snapshot
+│   ├── notes/
+│   │   └── issues.md         # Known issues and notes
+│   └── strategy/
+│       └── stratergy.md      # Detailed strategy specification
 └── .github/
     └── copilot-instructions.md  # Development guidelines
 ```
 
-## 🔌 WebSocket client (ws_client.py)
+## 🔌 WebSocket client (src/ws_client.py)
 
 This lightweight client consumes Delta’s public mark_price channel and powers the WS‑first BTCUSD price path in the app.
 
@@ -184,7 +190,7 @@ This lightweight client consumes Delta’s public mark_price channel and powers 
 Example (standalone):
 
 ```python
-from ws_client import DeltaWSClient
+from src.ws_client import DeltaWSClient
 
 ws = DeltaWSClient(use_testnet=True).connect()
 ws.subscribe_mark(["BTCUSD"])  # Client will send MARK:BTCUSD under the hood

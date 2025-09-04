@@ -25,7 +25,8 @@ Delta Exchange India is a cryptocurrency derivatives exchange that offers tradin
 - **Testnet**: `wss://socket-ind.testnet.deltaex.org`
 
 ### Connection Limits
-- **WebSocket**: Maximum 150 connections every 5 minutes per IP address
+- WebSocket connection limit guidance has varied; a historical note mentions "150 connections every 5 minutes per IP address" but this could not be verified in the current official docs. Confirm via testing or Delta support if you are near limits.
+- You will be disconnected if there is no activity within 60 seconds after establishing a connection.
 
 ## API Versions
 
@@ -33,7 +34,25 @@ This documentation covers API version 2. All endpoints are prefixed with `/v2/`.
 
 ## Rate Limits
 
-API rate limits vary by endpoint and user tier. Please refer to the specific endpoint documentation for rate limit information.
+### REST API Rate Limits
+
+When a rate limit is exceeded, the API returns HTTP 429 Too Many Requests. A response header `X-RATE-LIMIT-RESET` contains the time left in milliseconds after which the next API request can be attempted.
+
+- Throttling method: Unauthenticated requests by IP address; authenticated requests by user ID
+- Default quota: 10,000 requests per 5-minute window
+- Reset interval: Quota resets every 5 minutes
+
+### Product-Level Rate Limits
+
+Limits also exist within the matching engine:
+- Current limit: 500 operations per second for each product
+- Operation counting: Each order is one operation (batch of 50 orders = 50 ops)
+- Error response: Requests may fail with HTTP 429 even if REST API limit isn’t exceeded
+
+### WebSocket Connection Limits
+
+- Note: Specific connection limits vary. If you see 429 errors on connect, back off for 5–10 minutes and retry.
+- Idle timeout: You will be disconnected if there is no activity within 60 seconds after connection.
 
 ## General Information
 
@@ -47,29 +66,32 @@ API rate limits vary by endpoint and user tier. Please refer to the specific end
 
 ### Symbology
 
-Delta Exchange India uses a standardized symbology for different product types:
-
-#### Format Structure
-**General Format**: `Underlying Asset|Quoting Asset|_|Maturity Date (optional)`
+Delta Exchange India uses a standardized symbology across product types.
 
 #### Perpetual Futures
-Format: `{UNDERLYING}|{QUOTE}` (e.g., "BTC|USD", "ETH|USD")
+Format: `{UNDERLYING}{QUOTE}`
+Examples: `BTCUSD`, `ETHUSD`
 
-#### Futures
-Format: `{UNDERLYING}|{QUOTE}|_|{MATURITY}` where MATURITY uses format DDMMMYY
+#### Futures (Dated)
+Format: `{UNDERLYING}|{QUOTE}|_|{MATURITY}` with maturity as `DDMMMYY`.
 Examples:
-- `BTC|USD|_|31JAN24`: Bitcoin futures expiring January 31, 2024
-- `ETH|USD|_|28FEB24`: Ethereum futures expiring February 28, 2024
+- `BTC|USD|_|31JAN24` — Bitcoin futures expiring January 31, 2024
+- `ETH|USD|_|28FEB24` — Ethereum futures expiring February 28, 2024
 
 #### Options
-Format: `{UNDERLYING}|{QUOTE}|_|{STRIKE}|{TYPE}|{EXPIRY}` where:
-- TYPE: "C" for calls, "P" for puts
+Format: `{TYPE}-{UNDERLYING}-{STRIKE}-{EXPIRY}` where:
+- TYPE: `C` for calls, `P` for puts
+- UNDERLYING: e.g., `BTC`, `ETH`
 - STRIKE: Strike price
-- EXPIRY: Expiration date in DDMMMYY format
+- EXPIRY: `DDMMYY`
 
 Examples:
-- `BTC|USD|_|50000|C|31JAN24`: Bitcoin call option, strike $50,000, expires January 31, 2024
-- `ETH|USD|_|3000|P|28FEB24`: Ethereum put option, strike $3,000, expires February 28, 2024
+- `C-BTC-90000-310125` — BTC call, strike 90,000, expires 31 Jan 2025
+- `P-BTC-50000-280224` — BTC put, strike 50,000, expires 28 Feb 2024
+
+#### Price References
+1. Mark Price: `MARK:{Contract_Symbol}` (e.g., `MARK:BTCUSD`, `MARK:C-BTC-90000-310125`)
+2. Index Price: `.DE{UnderlyingAsset}{QuotingAsset}` (e.g., `.DEBNBXBT`). Special case: BTC/USD index is `.DEXBTUSD`.
 
 ### Timestamps
 
@@ -111,6 +133,8 @@ All authenticated requests must include the following headers:
 - `api-key`: Your API key
 - `signature`: Request signature
 - `timestamp`: Request timestamp
+- `User-Agent`: Your language or client (e.g., `python-3.10`, `java`) — required to avoid certain 4XX errors
+- `Content-Type`: `application/json`
 
 #### Signature Generation
 
@@ -127,29 +151,26 @@ Where:
 - `query_string`: URL query parameters (if any)
 - `body`: Request body for POST/PUT requests (empty string for GET)
 
+Important:
+- When query parameters are present, the query_string must include the leading `?` (i.e., sign `path + '?' + query`), matching server-side verification.
+- Signatures older than ~5 seconds may be rejected; ensure clocks are in sync and send promptly.
+- Public GET endpoints (e.g., `/v2/products`, `/v2/history/candles`) must not include auth headers.
+
 #### Example Signature Generation (Python)
 
 ```python
-import hmac
-import hashlib
-import time
-import json
+import hmac, hashlib, time
 
-def generate_signature(secret, method, path, query_string='', body=''):
-    timestamp = str(int(time.time()))
-    message = method + timestamp + path + query_string + body
-    signature = hmac.new(
-        secret.encode('utf-8'),
-        message.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    return signature, timestamp
+def generate_signature(secret: str, method: str, path: str, query: str = '', body: str = ''):
+  ts = str(int(time.time()))
+  # Include leading '?' when query exists
+  q = f'?{query}' if query and not query.startswith('?') else (query or '')
+  msg = method + ts + path + q + body
+  sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+  return sig, ts
 
 # Example usage
-api_secret = 'your_api_secret'
-method = 'GET'
-path = '/v2/orders'
-signature, timestamp = generate_signature(api_secret, method, path)
+sig, ts = generate_signature('your_api_secret', 'GET', '/v2/orders', query='product_id=1&state=open')
 ```
 
 #### Example Signature Generation (JavaScript)
@@ -157,21 +178,65 @@ signature, timestamp = generate_signature(api_secret, method, path)
 ```javascript
 const crypto = require('crypto');
 
-function generateSignature(secret, method, path, queryString = '', body = '') {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const message = method + timestamp + path + queryString + body;
+function generateSignature(secret, method, path, query = '', body = '') {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const q = query ? (query.startsWith('?') ? query : `?${query}`) : '';
+  const message = method + timestamp + path + q + body;
     const signature = crypto
         .createHmac('sha256', secret)
         .update(message)
         .digest('hex');
-    return { signature, timestamp };
+  return { signature, timestamp };
 }
 
 // Example usage
-const apiSecret = 'your_api_secret';
-const method = 'GET';
-const path = '/v2/orders';
-const { signature, timestamp } = generateSignature(apiSecret, method, path);
+const { signature, timestamp } = generateSignature('your_api_secret', 'GET', '/v2/orders', 'product_id=1&state=open');
+```
+
+### Updated Code Examples with User-Agent
+
+Include the `User-Agent` header on all authenticated requests.
+
+```python
+import hashlib, hmac, requests, time
+
+base_url = 'https://api.india.delta.exchange'
+api_key = 'your_api_key'
+api_secret = 'your_api_secret'
+
+def generate_signature(secret, message):
+  return hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# GET open orders
+method = 'GET'; path = '/v2/orders'; query = 'product_id=1&state=open'; body = ''
+timestamp = str(int(time.time()))
+signature_data = method + timestamp + path + '?' + query + body
+signature = generate_signature(api_secret, signature_data)
+
+headers = {
+  'api-key': api_key,
+  'timestamp': timestamp,
+  'signature': signature,
+  'User-Agent': 'python-rest-client',
+  'Content-Type': 'application/json',
+}
+resp = requests.request(method, f'{base_url}{path}', params={'product_id': 1, 'state': 'open'}, timeout=(3, 27), headers=headers)
+
+# POST place order
+method = 'POST'; path = '/v2/orders'; query = ''
+body = '{"order_type":"limit_order","size":3,"side":"buy","limit_price":"0.0005","product_id":16}'
+timestamp = str(int(time.time()))
+signature_data = method + timestamp + path + query + body
+signature = generate_signature(api_secret, signature_data)
+
+headers = {
+  'api-key': api_key,
+  'timestamp': timestamp,
+  'signature': signature,
+  'User-Agent': 'rest-client',
+  'Content-Type': 'application/json',
+}
+resp = requests.request(method, f'{base_url}{path}', data=body, timeout=(3, 27), headers=headers)
 ```
 
 ### Authentication Errors

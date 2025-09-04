@@ -10,6 +10,13 @@ This document formalizes the strategy so both humans and AI agents can implement
 
 Base lot: 1 lot = 0.001 BTC. Quantities below are in lots unless stated otherwise.
 
+Seed-phase startup invariant (explicit):
+- At process start, assume one open position of 1 lot at entry price x is already present.
+- Exactly two live orders must also exist:
+	- Same‑direction averaging: size 2 placed at x ∓ 750 (for LONG: x − 750; for SHORT: x + 750).
+	- Opposite TP + Flip: size 2 placed at x ± 300 (for LONG: SHORT 2 at x + 300; for SHORT: BUY 2 at x − 300).
+After any fill, immediately cancel the paired order, transition state, and re‑establish the two orders for the new state.
+
 ### 2) Parameters and Rules
 
 - Initial position: 1 lot in either LONG (+) or SHORT (−) at entry price x.

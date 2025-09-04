@@ -8,8 +8,8 @@ from datetime import datetime
 from typing import Dict, List, Any
 import os
 from dotenv import load_dotenv
-from delta_client import DeltaExchangeClient
-from ws_client import DeltaWSClient
+from src.delta_client import DeltaExchangeClient
+from src.ws_client import DeltaWSClient
 import json
 import logging
 
