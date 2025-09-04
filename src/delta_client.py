@@ -87,7 +87,7 @@ class DeltaExchangeClient:
         return signature, timestamp
     
     def _make_request(self, method: str, endpoint: str, params: Optional[Dict] = None, 
-                     data: Optional[Dict] = None) -> Dict[str, Any]:
+                     data: Optional[Dict] = None, *, suppress_log: bool = False) -> Dict[str, Any]:
         """
         Make authenticated request to Delta Exchange API
         
@@ -163,17 +163,20 @@ class DeltaExchangeClient:
             return response.json()
 
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"API request failed: {e}")
+            if not suppress_log:
+                self.logger.error(f"API request failed: {e}")
             status = getattr(getattr(e, 'response', None), 'status_code', None)
             text = None
             if hasattr(e, 'response') and e.response is not None:
                 try:
                     error_data = e.response.json()
-                    self.logger.error(f"Error details: {error_data}")
+                    if not suppress_log:
+                        self.logger.error(f"Error details: {error_data}")
                     return {'success': False, 'status': status, 'error': error_data}
                 except Exception:
                     text = e.response.text
-                    self.logger.error(f"Response content: {text}")
+                    if not suppress_log:
+                        self.logger.error(f"Response content: {text}")
                     return {'success': False, 'status': status, 'error': text}
             return {'success': False, 'status': status, 'error': str(e)}
     
@@ -401,8 +404,21 @@ class DeltaExchangeClient:
         Returns:
             Cancellation response
         """
-        # Primary: path parameter form (as per docs)
-        result = self._make_request('DELETE', f'/v2/orders/{order_id}')
+        # Prefer batch cancel when we know product context (most reliable)
+        if product_id or product_symbol:
+            payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
+            if product_id:
+                payload['product_id'] = product_id
+            elif product_symbol:
+                payload['product_symbol'] = product_symbol
+            alt_b = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
+            if isinstance(alt_b, dict) and alt_b.get('success'):
+                alt_b['note'] = 'cancel via batch'
+                return alt_b
+            # If batch failed, try path form next
+
+        # Path parameter form (as per docs)
+        result = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
         if isinstance(result, dict) and result.get('success'):
             return result
 
@@ -412,25 +428,12 @@ class DeltaExchangeClient:
             status = result.get('status')
             err_txt = str(result.get('error'))
 
-        # Fallback 1: query param form DELETE /v2/orders?id=...
-        if status == 404 or 'Not Found' in err_txt:
-            qp = {'id': order_id}
-            alt_q = self._make_request('DELETE', '/v2/orders', params=qp)
-            if isinstance(alt_q, dict) and alt_q.get('success'):
-                alt_q['note'] = 'cancel via query id'
-                return alt_q
-
-        # Fallback 2: batch endpoint with product context if available
-        if product_id or product_symbol:
-            payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
-            if product_id:
-                payload['product_id'] = product_id
-            elif product_symbol:
-                payload['product_symbol'] = product_symbol
-            alt_b = self._make_request('DELETE', '/v2/orders/batch', data=payload)
-            if isinstance(alt_b, dict) and alt_b.get('success'):
-                alt_b['note'] = 'cancel via batch'
-                return alt_b
+        # Final fallback: query param form DELETE /v2/orders?id=...
+        qp = {'id': order_id}
+        alt_q = self._make_request('DELETE', '/v2/orders', params=qp, suppress_log=True)
+        if isinstance(alt_q, dict) and alt_q.get('success'):
+            alt_q['note'] = 'cancel via query id'
+            return alt_q
 
         return result
     

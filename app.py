@@ -33,6 +33,11 @@ st.set_page_config(
 st.session_state.auto_refresh = True
 st.session_state.refresh_interval = 1
 
+# Initialize UI session state containers
+if 'dismissed_orders' not in st.session_state:
+    # Track order IDs we should temporarily hide after a cancel
+    st.session_state.dismissed_orders = []
+
 # Custom CSS for modern styling
 st.markdown("""
 <style>
@@ -296,15 +301,14 @@ def display_btc_mark_price(client, ws_client):
     is_live = isinstance(status, str) and status.startswith('Live')
     status_color = "#4CAF50" if is_live else "#ff9800" if status == 'Loading...' else "#f44336"
     price_display = f"${current_price:,.2f}" if current_price and current_price > 0 else status
-    
+
+    # Slimmed card to better match balance card height: remove extra rows, tighter spacing
     st.markdown(f"""
-    <div class="metric-card" style="border-left-color: {status_color}; text-align: center;">
-        <h2>BTCUSD</h2>
-        <p style="font-size: 2.5em; font-weight: bold; margin: 1rem 0;">
+    <div class="metric-card" style="border-left-color: {status_color}; text-align: center; padding-top: 0.25rem; padding-bottom: 0.25rem;">
+        <h3 style="margin: 0.1rem 0;">BTCUSD{' · WS' if status == 'Live (WS)' else (' · REST' if status == 'Live (REST)' else '')}</h3>
+        <p style="font-size: 2.0em; font-weight: bold; margin: 0.2rem 0; line-height: 1.1;">
             {price_display}
         </p>
-        <p><strong>Status:</strong> {status}</p>
-        <p><small>Last updated: {datetime.now().strftime('%H:%M:%S')}</small></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -343,13 +347,80 @@ def display_positions(client, ws_client=None):
                             if price_data and price_data.get('success'):
                                 current_price = price_data.get('mark_price')
                     
-                    # Calculate unrealized PnL if we have current price
+                    # Calculate unrealized PnL and percent
                     unrealized_pnl = 0.0
                     pnl_percentage = 0.0
-                    if current_price:
+                    # Prefer API-provided unrealized_pnl when available
+                    api_upnl = position.get('unrealized_pnl')
+                    if api_upnl is not None:
+                        try:
+                            unrealized_pnl = float(api_upnl)
+                        except Exception:
+                            unrealized_pnl = 0.0
+                    elif current_price:
                         unrealized_pnl = calculate_position_pnl(entry_price, current_price, size)
-                        if entry_price > 0:
-                            pnl_percentage = (unrealized_pnl / (entry_price * abs(size) * 0.001)) * 100
+
+                    # Compute PnL% as underlying move % times effective leverage
+                    if entry_price > 0 and size != 0:
+                        # Underlying move percent (signed by position side)
+                        underlying_move = ((current_price or entry_price) - entry_price) / entry_price
+                        if size < 0:
+                            underlying_move = -underlying_move
+                        base_pct = underlying_move * 100.0
+
+                        # Determine leverage: prefer DEFAULT_LEVERAGE from .env, else explicit fields, else derive, else 10
+                        leverage = None
+                        # 1) .env override/preference
+                        try:
+                            env_lev_raw = os.getenv('DEFAULT_LEVERAGE')
+                            if env_lev_raw:
+                                env_lev = float(str(env_lev_raw).lower().replace('x', '').strip())
+                                if env_lev >= 1:
+                                    leverage = env_lev
+                        except Exception:
+                            pass
+                        # 2) Explicit API fields if not set by env
+                        if leverage is None:
+                            for key in (
+                                "leverage", "effective_leverage", "initial_leverage", "actual_leverage",
+                                "user_leverage", "selected_leverage", "current_leverage"
+                            ):
+                                val = position.get(key)
+                                if val is not None:
+                                    try:
+                                        sval = str(val).lower().replace('x', '').strip()
+                                        f = float(sval)
+                                        if f >= 1:
+                                            leverage = f
+                                            break
+                                    except Exception:
+                                        pass
+
+                        if leverage is None:
+                            # Try derive from notional / margin
+                            try:
+                                notional = entry_price * abs(size) * 0.001
+                                margin_candidates = []
+                                for mkey in (
+                                    "position_initial_margin", "initial_margin", "isolated_margin",
+                                    "used_margin", "entry_margin", "position_margin", "margin"
+                                ):
+                                    if position.get(mkey) is not None:
+                                        val = float(position.get(mkey))
+                                        if val > 0:
+                                            margin_candidates.append(val)
+                                if margin_candidates and notional > 0:
+                                    leverage = max(notional / min(margin_candidates), 1.0)
+                            except Exception:
+                                pass
+                        if leverage is None:
+                            # Sensible default when leverage not provided by API
+                            try:
+                                leverage = float(os.getenv('DEFAULT_LEVERAGE', '10'))
+                            except Exception:
+                                leverage = 10.0
+
+                        pnl_percentage = base_pct * leverage
                     
                     position_cards.append({
                         'Symbol': symbol,
@@ -416,6 +487,13 @@ def display_orders(client):
         return
 
     open_orders = orders_data.get('result', []) or []
+    # Filter out orders that were just canceled in this session to avoid transient ghost cards
+    try:
+        dismissed = set(st.session_state.get('dismissed_orders', []) or [])
+        if dismissed:
+            open_orders = [o for o in open_orders if str(o.get('id')) not in {str(x) for x in dismissed}]
+    except Exception:
+        pass
     if not open_orders:
         st.info("No open orders found.")
         return
@@ -455,10 +533,23 @@ def display_orders(client):
             cols = st.columns(2)
             with cols[0]:
                 if st.button(f"Cancel {order_id}", key=f"cancel_{order_id}"):
-                    resp = client.cancel_order(int(order_id), product_id=product_id)
+                    resp = client.cancel_order(int(order_id), product_id=product_id, product_symbol=symbol)
                     if isinstance(resp, dict) and resp.get('success'):
                         note = resp.get('note')
                         st.success(f"Canceled {order_id}{' (' + note + ')' if note else ''}")
+                        # Remember this order id to hide it immediately in this session
+                        try:
+                            oid_str = str(order_id)
+                            if oid_str not in st.session_state.dismissed_orders:
+                                st.session_state.dismissed_orders.append(oid_str)
+                        except Exception:
+                            pass
+                        # Immediately refresh orders to prevent ghost/duplicate cards
+                        try:
+                            st.cache_data.clear()
+                        except Exception:
+                            pass
+                        st.rerun()
                     else:
                         st.error(f"Cancel failed: {resp}")
             with cols[1]:
@@ -505,58 +596,41 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("## ⚙️ Dashboard Settings")
-        st.info("Auto-refresh: 1s (fixed)")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # API Status
+        # API Status only
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         client = get_delta_client()
         is_connected = display_connection_status(client)
         st.markdown('</div>', unsafe_allow_html=True)
-
-        # Environment info
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.markdown("### 🌐 Environment")
-        _, _, base_url = get_api_credentials()
-        env_type = "🧪 Testnet" if "testnet" in base_url.lower() else "🚀 Production"
-        st.markdown(f"**Environment:** {env_type}")
-        st.markdown(f"**API URL:** {base_url}")
-        st.markdown(f"**Auto-Refresh:** Every {st.session_state.refresh_interval} seconds")
-        st.markdown('</div>', unsafe_allow_html=True)
     
     # Main content
+    # Prepare WS client once
+    _, _, base_url = get_api_credentials()
+    ws_client = get_ws_client(base_url)
+
     if is_connected:
-        # Account Balance
-        display_account_balance(client)
-        
+        # Top row: Account Balance and Mark Price side-by-side
+        top_left, top_right = st.columns(2)
+        with top_left:
+            display_account_balance(client)
+        with top_right:
+            display_btc_mark_price(client, ws_client)
+
         st.markdown("---")
-        
-        # Positions and Orders in columns
+
+        # Positions and Orders
         col1, col2 = st.columns(2)
-        
         with col1:
-            display_positions(client, ws_client=get_ws_client(base_url))
-        
+            display_positions(client, ws_client=ws_client)
         with col2:
             place_maker_only_order_ui(client)
             st.markdown("---")
             display_orders(client)
-    
-    st.markdown("---")
-    
-    # BTCUSD Mark Price only (WS preferred) - available even in read-only mode
-    _, _, base_url = get_api_credentials()
-    ws_client = get_ws_client(base_url)
-    display_btc_mark_price(client if is_connected else None, ws_client)
+    else:
+        # Show mark price even in read-only mode
+        display_btc_mark_price(None, ws_client)
 
-    # Improved auto-refresh: countdown then refresh
-    refresh_placeholder = st.empty()
-    for i in range(st.session_state.refresh_interval, 0, -1):
-        refresh_placeholder.info(f"🔄 Auto-refreshing in {i} seconds...")
-        time.sleep(1)
-    refresh_placeholder.empty()
+    # Silent auto-refresh
+    time.sleep(st.session_state.refresh_interval)
     st.cache_data.clear()
     st.rerun()
     
