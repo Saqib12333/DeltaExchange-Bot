@@ -5,6 +5,26 @@ import json
 import requests
 from typing import Dict, List, Optional, Any
 import logging
+from functools import wraps
+import os
+import threading
+import queue
+
+def rate_limit(calls_per_second=10):
+    """Rate limiting decorator"""
+    def decorator(func):
+        last_called = [0.0]
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            elapsed = time.time() - last_called[0]
+            left_to_wait = 1.0 / calls_per_second - elapsed
+            if left_to_wait > 0:
+                time.sleep(left_to_wait)
+            ret = func(*args, **kwargs)
+            last_called[0] = time.time()
+            return ret
+        return wrapper
+    return decorator
 
 class DeltaExchangeClient:
     """
@@ -24,6 +44,8 @@ class DeltaExchangeClient:
         self.api_secret = api_secret
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
+        # Set default timeout for requests
+        self.timeout = 30
         
         # Set up logging
         logging.basicConfig(level=logging.INFO)
@@ -43,7 +65,11 @@ class DeltaExchangeClient:
             Tuple of (signature, timestamp)
         """
         timestamp = str(int(time.time()))
-        message = method + timestamp + path + query_string + body
+        # Per server context, include '?' when query params are present
+        if query_string:
+            message = method + timestamp + path + '?' + query_string + body
+        else:
+            message = method + timestamp + path + body
         
         signature = hmac.new(
             self.api_secret.encode('utf-8'),
@@ -51,6 +77,13 @@ class DeltaExchangeClient:
             hashlib.sha256
         ).hexdigest()
         
+        # Optional debug for auth issues
+        if os.getenv('DELTA_DEBUG_AUTH', 'false').lower() == 'true':
+            try:
+                self.logger.info(f"Signature debug -> method={method}, timestamp={timestamp}, path={path}, query='{query_string}', body='{body}', signature_data='{message}'")
+            except Exception:
+                pass
+
         return signature, timestamp
     
     def _make_request(self, method: str, endpoint: str, params: Optional[Dict] = None, 
@@ -72,36 +105,52 @@ class DeltaExchangeClient:
         body = ''
         
         if params:
-            # Properly format query string for Delta API - for signature include ?
+            # Properly format query string for Delta API
             query_params = []
             for k, v in params.items():
                 query_params.append(f"{k}={v}")
-            query_string = '?' + '&'.join(query_params)  # Include ? for signature
-            # Construct full URL with query string
-            url = f"{url}?" + '&'.join(query_params)  # URL gets ? as well
+            # Build query pieces in insertion order
+            query_string = '&'.join(query_params)
+            # For URL construction: include the '?' character
+            url = f"{url}?" + query_string
         
         if data:
             body = json.dumps(data, separators=(',', ':'))  # Compact JSON format
         
-        # Generate signature - query_string should NOT include the '?' for signature
-        signature, timestamp = self._generate_signature(method, endpoint, query_string, body)
-        
-        # Prepare headers
+        # Determine if this endpoint is public (no auth headers needed)
+        is_public_get = (
+            method == 'GET' and (
+                endpoint.startswith('/v2/products') or
+                endpoint.startswith('/v2/history') or
+                endpoint.endswith('/orders') and '/v2/products/' in endpoint  # product orderbook
+            )
+        )
+
         headers = {
-            'api-key': self.api_key,
-            'signature': signature,
-            'timestamp': timestamp,
             'Content-Type': 'application/json'
         }
+
+        # Only sign/authenticate non-public endpoints
+        if not is_public_get:
+            signature, timestamp = self._generate_signature(method, endpoint, query_string, body)
+            headers.update({
+                'api-key': self.api_key,
+                'signature': signature,
+                'timestamp': timestamp,
+            })
         
         try:
             if method == 'GET':
                 # Use the full URL with query string, no separate params
-                response = self.session.get(url, headers=headers)
+                response = self.session.get(url, headers=headers, timeout=self.timeout)
             elif method == 'POST':
-                response = self.session.post(url, headers=headers, json=data)
+                response = self.session.post(url, headers=headers, json=data, timeout=self.timeout)
             elif method == 'DELETE':
-                response = self.session.delete(url, headers=headers, params=params)
+                # Send JSON body for DELETE when provided
+                if data:
+                    response = self.session.delete(url, headers=headers, json=data, timeout=self.timeout)
+                else:
+                    response = self.session.delete(url, headers=headers, timeout=self.timeout)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
@@ -114,11 +163,13 @@ class DeltaExchangeClient:
                 try:
                     error_data = e.response.json()
                     self.logger.error(f"Error details: {error_data}")
-                    return error_data
+                    return {'success': False, 'error': error_data}
                 except:
                     self.logger.error(f"Response content: {e.response.text}")
-            raise
+                    return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e)}
     
+    @rate_limit(calls_per_second=5)
     def get_account_balance(self) -> Dict[str, Any]:
         """
         Get account balance and wallet information
@@ -128,6 +179,7 @@ class DeltaExchangeClient:
         """
         return self._make_request('GET', '/v2/wallet/balances')
     
+    @rate_limit(calls_per_second=5)
     def get_positions(self, product_ids: Optional[List[int]] = None, 
                      underlying_asset_symbol: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -151,6 +203,7 @@ class DeltaExchangeClient:
         
         return self._make_request('GET', '/v2/positions', params=params)
     
+    @rate_limit(calls_per_second=5)
     def get_orders(self, product_ids: Optional[List[int]] = None, 
                    page_size: int = 100) -> Dict[str, Any]:
         """
@@ -197,6 +250,7 @@ class DeltaExchangeClient:
         """
         return self._make_request('GET', f'/v2/products/{symbol}')
     
+    @rate_limit(calls_per_second=3)  # More conservative for mark price calls
     def get_mark_price(self, symbol: str) -> Dict[str, Any]:
         """
         Get mark price for a product using historical candles
@@ -353,6 +407,7 @@ class DeltaExchangeClient:
         
         return self._make_request('DELETE', '/v2/orders/all', data=data)
     
+    @rate_limit(calls_per_second=5)
     def test_connection(self) -> bool:
         """
         Test API connection
@@ -362,7 +417,121 @@ class DeltaExchangeClient:
         """
         try:
             response = self.get_account_balance()
-            return response.get('success', False)
+            return response.get('success', False) if isinstance(response, dict) else bool(response)
         except Exception as e:
             self.logger.error(f"Connection test failed: {e}")
             return False
+
+
+class DeltaWebSocketClient:
+    """Minimal WebSocket client for public mark_price feed."""
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.ws_url = self._get_ws_url(base_url)
+        self.logger = logging.getLogger(__name__)
+        self._thread: Optional[threading.Thread] = None
+        self._ws = None  # type: ignore
+        self._connected = False
+        self._latest: Dict[str, Dict[str, Any]] = {}
+        self._cmd_q: "queue.Queue[dict]" = queue.Queue()
+        self._stop_event = threading.Event()
+
+    def _get_ws_url(self, base_url: str) -> str:
+        if 'testnet' in base_url:
+            return 'wss://socket-ind.testnet.deltaex.org'
+        return 'wss://socket.india.delta.exchange'
+
+    def start(self):
+        try:
+            import websocket  # websocket-client
+        except Exception as e:
+            self.logger.error(f"websocket-client not installed: {e}")
+            return False
+
+        def on_open(ws):  # noqa: ANN001
+            self._connected = True
+            self.logger.info("WebSocket connected")
+            # Default subscribe to BTCUSD mark price
+            self.subscribe_mark_price('BTCUSD')
+
+        def on_message(ws, message):  # noqa: ANN001
+            try:
+                data = json.loads(message)
+                if data.get('type') == 'mark_price':
+                    symbol = data.get('symbol', '')
+                    # symbol is like 'MARK:BTCUSD'
+                    core_symbol = symbol.replace('MARK:', '')
+                    price = float(data.get('price')) if data.get('price') is not None else None
+                    self._latest[core_symbol] = {
+                        'price': price,
+                        'received_at': int(time.time())
+                    }
+                # Process queued commands (subscribe/unsubscribe) if any
+                while not self._cmd_q.empty():
+                    ws.send(json.dumps(self._cmd_q.get_nowait()))
+            except Exception as e:
+                self.logger.error(f"WS on_message error: {e}")
+
+        def on_error(ws, error):  # noqa: ANN001
+            self.logger.error(f"WebSocket error: {error}")
+
+        def on_close(ws, status_code, msg):  # noqa: ANN001
+            self._connected = False
+            self.logger.info(f"WebSocket closed: {status_code} {msg}")
+
+        def run():
+            ws = websocket.WebSocketApp(self.ws_url,
+                                        on_open=on_open,
+                                        on_message=on_message,
+                                        on_error=on_error,
+                                        on_close=on_close)
+            self._ws = ws
+            # Heartbeat/ping can be handled by run_forever params if needed
+            while not self._stop_event.is_set():
+                try:
+                    ws.run_forever(ping_interval=20, ping_timeout=10)
+                except Exception as e:  # reconnect loop
+                    self.logger.error(f"WS run_forever error: {e}")
+                    time.sleep(3)
+                if not self._stop_event.is_set():
+                    time.sleep(1)
+
+        if self._thread and self._thread.is_alive():
+            return True
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self):
+        self._stop_event.set()
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2)
+
+    def subscribe_mark_price(self, symbol: str):
+        """Subscribe to mark_price channel for MARK:SYMBOL."""
+        payload = {
+            "type": "subscribe",
+            "payload": {
+                "channels": [
+                    {"name": "mark_price", "symbols": [f"MARK:{symbol}"]}
+                ]
+            }
+        }
+        if self._ws is not None and self._connected:
+            try:
+                self._ws.send(json.dumps(payload))
+            except Exception:
+                pass
+        else:
+            self._cmd_q.put(payload)
+
+    def get_latest_mark_price(self, symbol: str) -> Optional[Dict[str, Any]]:
+        entry = self._latest.get(symbol)
+        return entry

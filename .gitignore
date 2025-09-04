@@ -1,4 +1,5 @@
 venv/
+.venv/
 .env
 # env variants (but keep template example)
 .env.*
@@ -12,3 +13,5 @@ logs/
 *.log
 __pycache__/
 *.pyc
+*.cpython-313.pyc
+

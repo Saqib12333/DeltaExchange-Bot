@@ -3,32 +3,45 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.0+-red.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-3.0.2-informational.svg)](#)
 
-A powerful cryptocurrency trading automation system for Delta Exchange India, featuring real-time portfolio monitoring and automated strategy execution.
+A powerful cryptocurrency trading automation system for Delta Exchange India, featuring real-time portfolio monitoring and a planned automated strategy engine.
 
 ![Dashboard Preview](https://via.placeholder.com/800x400/1f77b4/ffffff?text=Delta+Exchange+Dashboard)
 
 ## ✨ Features
 
-### 📊 **Real-Time Portfolio Dashboard** ✅ **FULLY OPERATIONAL**
+### 📊 Real-Time Portfolio Dashboard — FULLY OPERATIONAL
 - **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
 - **Position Tracking** - View open positions with accurate P&L calculations using real mark prices
 - **Order Management** - Track all open orders with properly formatted status information
-- **Live Mark Price Monitoring** - Real-time accurate prices (BTCUSD: $112,181.24, ETHUSD: $4,462.24)
-- **Modern UI** - Beautiful, responsive interface with 1-second auto-refresh
-- **No Configuration Required** - Auto-refreshes every 1 second for real-time monitoring
+- **BTCUSD Mark Price** - Real-time accurate price monitoring with status indicators
+- **1s Auto-Refresh** - Fixed 1-second refresh cadence (no manual controls)
+- **WebSocket Mark Price** - Live WS feed for BTCUSD with REST candles as fallback
+- **Modern UI** - Beautiful, responsive interface with professional error handling
+- **Stable Performance** - Fixed caching issues and crashes
 
-### 🤖 **Automated Trading Strategy** 🚧 **IN DEVELOPMENT**
+### 🤖 Automated Trading Strategy — IN DEVELOPMENT
 - **Haider Strategy** - Advanced averaging and take-profit system (Phase 2)
 - **Risk Management** - Built-in position size limits and distance constraints
 - **State Tracking** - Intelligent order management with automatic state transitions
 - **Testnet Support** - Safe testing environment before live trading
 
-### 🔒 **Security & Reliability** ✅ **PRODUCTION READY**
+### 🔒 Security & Reliability
 - **Fixed Authentication** - HMAC-SHA256 with proper query string formatting
+- **Rate Limiting** - Prevents API abuse with intelligent request throttling
 - **Environment Isolation** - Separate testnet and production configurations
-- **Comprehensive Error Handling** - Resolved all UI formatting issues and API errors
-- **Real-time Updates** - 1-second cache TTL for live data feeds
+- **Comprehensive Error Handling** - Safe API calls with graceful degradation
+- **Request Timeouts** - 30-second timeouts prevent hanging requests
+
+## 🎉 Recent Critical Fixes (September 2025)
+
+- **API Authentication**: Correct signature generation. When signing, include a '?' between path and query if query params exist. Public GET endpoints skip auth headers.
+- **Caching Stability**: Fixed Streamlit cache issues by using underscore-prefixed `_client` params in cached functions and tuned TTLs.
+- **WS-first Mark Price**: Added WebSocket mark price for BTCUSD with REST candles fallback using `MARK:BTCUSD`.
+- **UI Simplification**: Removed manual refresh controls and redundant tables; card-first UI.
+- **Auto-Refresh**: Fixed 1-second auto-refresh with countdown placeholder and safe rerun.
+- **Rate Limiting & Timeouts**: Added decorators and consistent 30s request timeouts.
 
 ## 🚀 Quick Start
 
@@ -54,6 +67,11 @@ Create a `.env` file in the project root:
 DELTA_API_KEY=your_api_key_here
 DELTA_API_SECRET=your_api_secret_here
 USE_TESTNET=true  # Set to false for production
+# Optionally override base URLs
+DELTA_BASE_URL=https://api.india.delta.exchange
+TESTNET_API_URL=https://cdn-ind.testnet.deltaex.org
+# Optional: enable verbose auth debug logs
+DELTA_DEBUG_AUTH=false
 ```
 
 ### 4. Get Your API Keys
@@ -68,7 +86,11 @@ USE_TESTNET=true  # Set to false for production
 
 ### 5. Run the Application
 ```bash
-# Run the Streamlit dashboard
+# Windows PowerShell (optional venv shown):
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
@@ -79,16 +101,19 @@ The dashboard will automatically test your API connection and display the status
 
 ### Portfolio Overview
 - **Account Balance**: View your available and total balances across all assets
-- **Positions**: Monitor open positions with real-time P&L calculations
+- **Positions**: Monitor open positions with real-time P&L calculations using accurate mark prices
 - **Orders**: Track pending orders and their current status
-- **Mark Prices**: Live price feeds for major trading pairs
+- **BTCUSD Mark Price**: Live price feed with status indicators (Live/Loading/Error)
 
-### Auto-Refresh ✅ **AUTOMATIC**
-The dashboard automatically refreshes every 1 second to provide real-time data. No manual configuration is needed - your portfolio data stays current automatically with:
-- **Live Mark Prices**: Real BTCUSD ($112,181.24) and ETHUSD ($4,462.24) prices
-- **Real-time P&L**: Accurate profit/loss calculations using current market prices  
-- **Order Status**: Instant updates when orders are filled or modified
-- **Balance Changes**: Immediate reflection of account balance modifications
+### Refresh Behavior
+- Auto-Refresh: Fixed at 1 second for a live experience (no manual controls)
+- Optimized: Smart caching for positions/orders; mark price via WebSocket (REST fallback)
+
+### Performance Characteristics
+- Low CPU usage in practice with 1s cadence and caching
+- Intelligent caching with appropriate TTL values
+- Built-in rate limiting to prevent API abuse
+- Error resilient: continues working even with transient failures
 
 ## 🎯 Trading Strategy: "Haider Strategy"
 
@@ -120,8 +145,9 @@ The bot implements a sophisticated averaging and take-profit system designed for
 | `DELTA_API_KEY` | Your Delta Exchange API key | Required |
 | `DELTA_API_SECRET` | Your Delta Exchange API secret | Required |
 | `USE_TESTNET` | Use testnet environment | `true` |
-| `DELTA_BASE_URL` | Production API URL | `https://api.delta.exchange` |
-| `TESTNET_API_URL` | Testnet API URL | `https://testnet-api.deltaex.org` |
+| `DELTA_BASE_URL` | Production API URL | `https://api.india.delta.exchange` |
+| `TESTNET_API_URL` | Testnet API URL | `https://cdn-ind.testnet.deltaex.org` |
+| `DELTA_DEBUG_AUTH` | Print signature_data for debugging | `false` |
 
 ### Testnet vs Production
 - **Testnet**: Safe environment for testing strategies without real money
@@ -136,7 +162,7 @@ DeltaExchange-Bot/
 ├── app.py               # Main dashboard application
 ├── delta_client.py      # Delta Exchange API client
 ├── requirements.txt     # Python dependencies
-├── .env.example        # Environment template
+├── Delta-API-Docs.md    # API reference snapshot
 ├── Stratergy/
 │   └── stratergy.md    # Detailed strategy specification
 └── .github/
@@ -176,8 +202,8 @@ DeltaExchange-Bot/
 - **API Authentication Fixed**: Resolved signature generation issue with query string formatting
 - **UI Formatting Errors**: Fixed all f-string formatting crashes in orders and mark prices display
 - **Accurate Mark Prices**: Implemented proper mark price fetching using historical candles endpoint
-- **Real-time Updates**: Reduced cache TTL to 1 second for live data monitoring
-- **Automatic Refresh**: Removed manual settings, now auto-refreshes every 1 second
+- **Real-time Updates**: WebSocket mark price first, REST fallback
+- **Automatic Refresh**: 1-second default, no manual settings
 
 **"Failed to connect to Delta Exchange API"**
 - Verify your API keys are correct and active
@@ -187,9 +213,10 @@ DeltaExchange-Bot/
 - Ensure you're using the correct environment (testnet vs production)
 
 **"Invalid signature"**
-- Your API secret might be incorrect
-- Check for extra spaces or characters in your `.env` file
-- Regenerate your API keys if necessary
+- Ensure signature message uses: `method + timestamp + path + ('?' + query_string if present) + body`
+- Public GET endpoints should not send auth headers
+- Set `DELTA_DEBUG_AUTH=true` to log `signature_data` and verify locally
+- Check for extra spaces or wrong secrets in `.env`
 
 **Dashboard not loading**
 - Ensure all dependencies are installed: `pip install -r requirements.txt`
@@ -238,7 +265,7 @@ We welcome contributions to improve the Delta Exchange Trading Bot! Here's how y
 ### Phase 2: Strategy Automation 🚧
 - [ ] Automated order placement
 - [ ] Strategy state machine implementation
-- [ ] WebSocket integration for real-time updates
+- [x] WebSocket integration for real-time mark price updates
 - [ ] Position state persistence
 
 ### Phase 3: Advanced Features 📋
