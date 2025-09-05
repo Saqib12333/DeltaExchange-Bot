@@ -53,13 +53,22 @@ st.markdown("""
         background-clip: text;
     }
     
+    /* Card defaults (light theme) */
     .metric-card {
-        background: white;
+        background: #ffffff;
+        color: #111827; /* slate-900 */
         padding: 1rem;
         border-radius: 10px;
         box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         border-left: 4px solid #1f77b4;
         margin: 0.5rem 0;
+    }
+    /* Dark theme cards */
+    body[data-theme="dark"] .metric-card {
+        background: #1f2937; /* slate-800 */
+        color: #e5e7eb;      /* slate-200 */
+        border-left-color: #60a5fa; /* lighter blue for contrast */
+        box-shadow: 0 2px 12px rgba(0,0,0,0.35);
     }
     
     .status-card {
@@ -89,6 +98,19 @@ st.markdown("""
         padding: 1rem;
         border-radius: 10px;
         margin: 1rem 0;
+    }
+    /* Dark theme sidebar background */
+    body[data-theme="dark"] .sidebar-section {
+        background: #111827; /* slate-900 */
+        color: #e5e7eb;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.3);
+    }
+
+    /* Hide stray empty input that sometimes appears at the top of the sidebar */
+    /* Hide any text inputs in the sidebar (we don't render any there) */
+    [data-testid="stSidebar"] input[type="text"],
+    [data-testid="stSidebar"] .stTextInput {
+        display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -471,7 +493,7 @@ def display_positions(client, ws_client=None):
     else:
         st.warning("Unable to fetch positions data.")
 
-@st.cache_data(ttl=5)  # Cache orders for 5 seconds
+@st.cache_data(ttl=2)  # Cache orders briefly to minimize ghost cards after cancel
 def get_cached_orders(_client):
     """Get cached orders"""
     # Fetch only open orders to avoid stale/uncancelable IDs
@@ -512,7 +534,8 @@ def display_orders(client):
         side_color = "#4CAF50" if side == 'BUY' else "#f44336"
         price_display = f"${float(limit_price):,.2f}" if limit_price else 'Market'
 
-        with st.container():
+        # Keyed container prevents Streamlit from reusing/sticking duplicate elements across reruns
+        with st.container(key=f"order_card_{order_id}"):
             st.markdown(f"""
             <div class="metric-card" style="border-left-color: {side_color};">
                 <h4>{symbol} - {side} {order_type}</h4>
