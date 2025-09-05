@@ -73,6 +73,8 @@ DELTA_BASE_URL=https://api.india.delta.exchange
 TESTNET_API_URL=https://cdn-ind.testnet.deltaex.org
 # Optional: enable verbose auth debug logs
 DELTA_DEBUG_AUTH=false
+# Optional: force IPv4-only HTTP (helps with IP whitelist issues showing IPv6)
+# DELTA_FORCE_IPV4=true
 ```
 
 ### 4. Get Your API Keys
@@ -243,6 +245,7 @@ ws.close()
 - **IMPORTANT**: Ensure both your IPv4 and IPv6 addresses are whitelisted in Delta Exchange API settings
 - If using IP whitelisting, get your current IP with: `curl https://api.ipify.org` (IPv4) or `curl https://api6.ipify.org` (IPv6)
 - Ensure you're using the correct environment (testnet vs production)
+ - If errors show `ip_not_whitelisted_for_api_key` with an IPv6 like `2405:...`, either add that IPv6 to the whitelist or set `DELTA_FORCE_IPV4=true` in `.env` to make requests use IPv4 only.
 
 **"Invalid signature"**
 - Ensure signature message uses: `method + timestamp + path + ('?' + query_string if present) + body`

@@ -9,6 +9,7 @@ from functools import wraps
 import os
 import threading
 import queue
+import socket
 
 def rate_limit(calls_per_second=10):
     """Rate limiting decorator"""
@@ -43,6 +44,23 @@ class DeltaExchangeClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = base_url.rstrip('/')
+
+        # Optionally force IPv4 for all outbound requests to avoid IPv6-only egress
+        # triggering ip_not_whitelisted_for_api_key on exchanges that whitelist IPv4s.
+        force_ipv4 = os.getenv('DELTA_FORCE_IPV4', 'false').lower() in ('1', 'true', 'yes', 'on')
+        if force_ipv4:
+            try:
+                import urllib3.util.connection as urllib3_cn  # type: ignore
+
+                def allowed_gai_family() -> int:  # pragma: no cover - simple monkeypatch
+                    return socket.AF_INET
+
+                # Monkeypatch urllib3 to only use IPv4 address family
+                urllib3_cn.allowed_gai_family = allowed_gai_family  # type: ignore[attr-defined]
+            except Exception as e:
+                # Logger not yet set; use root logger to avoid missing early errors
+                logging.getLogger(__name__).warning(f"Failed to enforce IPv4 (continuing with default): {e}")
+
         self.session = requests.Session()
         # Set default timeout for requests
         self.timeout = 30
