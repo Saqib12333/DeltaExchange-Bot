@@ -14,4 +14,4 @@ logs/
 __pycache__/
 *.pyc
 *.cpython-313.pyc
-
+.playwright-mcp

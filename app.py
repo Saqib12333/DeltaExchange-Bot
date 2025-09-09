@@ -13,6 +13,7 @@ from src.ws_client import DeltaWSClient
 import json
 import logging
 from typing import Optional
+from streamlit.components.v1 import html
 
 # Load environment variables
 load_dotenv()
@@ -29,17 +30,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 1s auto-refresh default; no manual controls
+# Auto-refresh defaults; softened to reduce flicker
 st.session_state.auto_refresh = True
-st.session_state.refresh_interval = 1
+if 'refresh_interval' not in st.session_state:
+    # 3 seconds is a good balance for UX vs freshness
+    st.session_state.refresh_interval = 3
 
 # Initialize UI session state containers
 if 'dismissed_orders' not in st.session_state:
     # Track order IDs we should temporarily hide after a cancel
     st.session_state.dismissed_orders = []
 
-# Custom CSS for modern styling
-st.markdown("""
+# One-time CSS injection guard
+# Custom CSS for modern styling (one-time injection)
+if not st.session_state.get('_css_injected'):
+    st.session_state['_css_injected'] = True
+    st.markdown("""
 <style>
     .main-header {
         font-size: 2.5rem;
@@ -106,14 +112,56 @@ st.markdown("""
         box-shadow: 0 1px 6px rgba(0,0,0,0.3);
     }
 
-    /* Hide stray empty input that sometimes appears at the top of the sidebar */
-    /* Hide any text inputs in the sidebar (we don't render any there) */
-    [data-testid="stSidebar"] input[type="text"],
-    [data-testid="stSidebar"] .stTextInput {
-        display: none !important;
+    /* Tweak sidebar spacing; do not hide inputs globally to avoid UI glitches */
+    [data-testid="stSidebar"] .block-container{
+        padding-top: 1rem;
     }
+
+    /* Reduce motion and disable transition animations that cause ghost elements */
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+    /* Ensure Streamlit element containers never linger translucent during reruns */
+    [data-testid="stElementContainer"],
+    [data-testid="stCaptionContainer"],
+    [data-testid="stVerticalBlock"] {
+        opacity: 1 !important;
+        transform: none !important;
+    }
+    /* Hide any Streamlit containers that are in the middle of fade-out (ghosts) */
+    [data-testid="stElementContainer"][style*="opacity: 0."] { display: none !important; }
+    [data-testid="stCaptionContainer"][style*="opacity: 0."] { display: none !important; }
+    [data-testid="stVerticalBlock"][style*="opacity: 0."] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
+
+# Inject a small MutationObserver once to hide transient low-opacity ghost containers on reruns
+if not st.session_state.get('_anti_ghost_js'):
+        st.session_state['_anti_ghost_js'] = True
+        html(
+                """
+                <script>
+                (function(){
+                    const THRESH = 0.99;
+                    function hideGhosts(){
+                        const nodes = document.querySelectorAll('[data-testid="stElementContainer"], [data-testid="stCaptionContainer"], [data-testid="stVerticalBlock"]');
+                        nodes.forEach(el => {
+                            const s = window.getComputedStyle(el);
+                            const op = parseFloat(s.opacity || '1');
+                            if (op < THRESH) {
+                                el.style.display = 'none';
+                            }
+                        });
+                    }
+                    hideGhosts();
+                    const mo = new MutationObserver(() => hideGhosts());
+                    mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['style','class'] });
+                })();
+                </script>
+                """,
+                height=0,
+        )
 
 @st.cache_data(ttl=30)  # Reasonable cache time
 def get_api_credentials():
@@ -289,12 +337,15 @@ def get_btc_mark_price_rest(_client):
     return safe_api_call(_client.get_mark_price, 'BTCUSD')
 
 @st.cache_resource
-def get_ws_client(base_url: str):
-    """Create and return a singleton WS client subscribed to MARK:BTCUSD."""
+def get_ws_client(base_url: str, api_key: Optional[str] = None, api_secret: Optional[str] = None):
+    """Create and return a singleton WS client. Auth if creds provided, subscribe to BTCUSD mark."""
     use_testnet = 'testnet' in base_url.lower()
     ws = DeltaWSClient(use_testnet=use_testnet)
+    # Provide creds for private channels when available
+    if api_key and api_secret:
+        ws.configure_auth(api_key, api_secret)
     ws.connect()
-    ws.subscribe_mark(["BTCUSD"])
+    ws.subscribe_mark(["BTCUSD"])  # public mark price
     return ws
 
 def display_btc_mark_price(client, ws_client):
@@ -339,14 +390,29 @@ def get_cached_positions(_client):
     """Get cached positions"""
     return safe_api_call(_client.get_positions)
 
+def _get_positions_ws_first(client, ws_client=None):
+    """Return list of positions, preferring WS snapshot when available; fallback to REST."""
+    positions: list[dict] = []
+    try:
+        if ws_client and getattr(ws_client, 'is_authenticated', False):
+            snap = ws_client.get_positions()  # dict symbol->position
+            if isinstance(snap, dict) and snap:
+                positions = list(snap.values())
+                return positions
+    except Exception:
+        pass
+    # Fallback to REST
+    data = get_cached_positions(client)
+    if data and data.get('success'):
+        return data.get('result', []) or []
+    return []
+
 def display_positions(client, ws_client=None):
     """Display current positions"""
     st.markdown("### 📊 Current Positions")
+    positions = _get_positions_ws_first(client, ws_client)
     
-    positions_data = get_cached_positions(client)
-    
-    if positions_data and positions_data.get('success'):
-        positions = positions_data.get('result', [])
+    if positions:
         
         if positions:
             position_cards = []
@@ -427,10 +493,14 @@ def display_positions(client, ws_client=None):
                                     "position_initial_margin", "initial_margin", "isolated_margin",
                                     "used_margin", "entry_margin", "position_margin", "margin"
                                 ):
-                                    if position.get(mkey) is not None:
-                                        val = float(position.get(mkey))
-                                        if val > 0:
-                                            margin_candidates.append(val)
+                                    val_raw = position.get(mkey)
+                                    if val_raw is not None:
+                                        try:
+                                            valf = float(val_raw)
+                                            if valf > 0:
+                                                margin_candidates.append(valf)
+                                        except Exception:
+                                            pass
                                 if margin_candidates and notional > 0:
                                     leverage = max(notional / min(margin_candidates), 1.0)
                             except Exception:
@@ -490,8 +560,6 @@ def display_positions(client, ws_client=None):
                 st.info("No open positions found.")
         else:
             st.info("No positions data available.")
-    else:
-        st.warning("Unable to fetch positions data.")
 
 @st.cache_data(ttl=2)  # Cache orders briefly to minimize ghost cards after cancel
 def get_cached_orders(_client):
@@ -499,16 +567,36 @@ def get_cached_orders(_client):
     # Fetch only open orders to avoid stale/uncancelable IDs
     return safe_api_call(_client.get_orders, state='open')
 
-def display_orders(client):
+def _get_orders_ws_first(client, ws_client=None):
+    """Return list of open orders, preferring WS snapshot when available; fallback to REST."""
+    # WS map keyed by order id -> order dict
+    try:
+        if ws_client and getattr(ws_client, 'is_authenticated', False):
+            omap = ws_client.get_orders()
+            if isinstance(omap, dict) and omap:
+                # Only include orders that are not in terminal state
+                res = []
+                for od in omap.values():
+                    state = str(od.get('state') or '').lower()
+                    if state not in {'cancelled', 'filled', 'closed'}:
+                        res.append(od)
+                return res
+    except Exception:
+        pass
+    # REST fallback
+    data = get_cached_orders(client)
+    if data and data.get('success'):
+        return data.get('result', []) or []
+    return []
+
+def display_orders(client, ws_client=None):
     """Display current open orders with per-order cancel buttons."""
     st.markdown("### 📋 Open Orders")
 
-    orders_data = get_cached_orders(client)
-    if not (orders_data and orders_data.get('success')):
-        st.warning("Unable to fetch orders data.")
+    open_orders = _get_orders_ws_first(client, ws_client)
+    if not open_orders:
+        st.info("No open orders found.")
         return
-
-    open_orders = orders_data.get('result', []) or []
     # Filter out orders that were just canceled in this session to avoid transient ghost cards
     try:
         dismissed = set(st.session_state.get('dismissed_orders', []) or [])
@@ -516,6 +604,7 @@ def display_orders(client):
             open_orders = [o for o in open_orders if str(o.get('id')) not in {str(x) for x in dismissed}]
     except Exception:
         pass
+    # If still empty after filtering, show info
     if not open_orders:
         st.info("No open orders found.")
         return
@@ -627,34 +716,39 @@ def main():
     
     # Main content
     # Prepare WS client once
-    _, _, base_url = get_api_credentials()
-    ws_client = get_ws_client(base_url)
+    api_key, api_secret, base_url = get_api_credentials()
+    ws_client = get_ws_client(base_url, api_key, api_secret)
 
     if is_connected:
         # Top row: Account Balance and Mark Price side-by-side
         top_left, top_right = st.columns(2)
         with top_left:
-            display_account_balance(client)
+            with st.container(key="balance_container"):
+                display_account_balance(client)
         with top_right:
-            display_btc_mark_price(client, ws_client)
+            with st.container(key="markprice_container"):
+                display_btc_mark_price(client, ws_client)
 
         st.markdown("---")
 
         # Positions and Orders
         col1, col2 = st.columns(2)
         with col1:
-            display_positions(client, ws_client=ws_client)
+            with st.container(key="positions_container"):
+                display_positions(client, ws_client=ws_client)
         with col2:
-            place_maker_only_order_ui(client)
+            with st.container(key="place_order_container"):
+                place_maker_only_order_ui(client)
             st.markdown("---")
-            display_orders(client)
+            with st.container(key="orders_container"):
+                display_orders(client, ws_client=ws_client)
     else:
         # Show mark price even in read-only mode
-        display_btc_mark_price(None, ws_client)
+        with st.container(key="markprice_readonly"):
+            display_btc_mark_price(None, ws_client)
 
-    # Silent auto-refresh
+    # Soft auto-refresh: rerun at a slower cadence without clearing caches (reduces flicker)
     time.sleep(st.session_state.refresh_interval)
-    st.cache_data.clear()
     st.rerun()
     
     # Footer
