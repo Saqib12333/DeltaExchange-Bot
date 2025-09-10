@@ -127,6 +127,8 @@ class DataService:
         assert self.rest_client is not None and self.ws_client is not None
         prev = None
         last_bal_pull = 0.0
+        last_rest_mark_pull = 0.0
+        ws_mark_seen = False
         while not self._stop.is_set():
             try:
                 # Mark price from WS
@@ -134,6 +136,18 @@ class DataService:
                 price = self.ws_client.get_latest_mark("BTCUSD")
                 if price is not None:
                     marks["BTCUSD"] = float(price)
+                    ws_mark_seen = True
+
+                # REST fallback if WS mark not yet received after a short grace period (e.g., cold start)
+                loop_now = asyncio.get_running_loop().time()
+                if not ws_mark_seen and loop_now - last_rest_mark_pull > 5:
+                    last_rest_mark_pull = loop_now
+                    try:
+                        rest_mark = self.rest_client.get_mark_price("BTCUSD")
+                        if isinstance(rest_mark, dict) and rest_mark.get("success") and rest_mark.get("mark_price"):
+                            marks["BTCUSD"] = float(rest_mark["mark_price"])
+                    except Exception:
+                        pass
 
                 # Private snapshots from WS (preferred)
                 positions = self.ws_client.get_positions() if hasattr(self.ws_client, "get_positions") else {}
@@ -198,6 +212,13 @@ class DataService:
                     prev = snap
                     # Schedule broadcasts
                     await self._broadcast_all()
+                else:
+                    # Light debug when nothing updates for several cycles while WS mark missing
+                    if os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes") and not ws_mark_seen:
+                        try:
+                            print("[DEBUG] Waiting for first mark price... snapshot version", self.snapshot.version)
+                        except Exception:
+                            pass
             except Exception:
                 # Avoid tight error loops
                 await asyncio.sleep(0.5)

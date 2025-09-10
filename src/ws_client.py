@@ -188,6 +188,13 @@ class DeltaWSClient:
 
         mtype = data.get("type")
 
+        # Optional raw debug
+        if os.getenv("DELTA_WS_DEBUG", "false").lower() in {"1", "true", "yes"}:
+            try:
+                self.logger.info(f"WS recv type={mtype} keys={list(data.keys())[:6]} raw={str(data)[:240]}")
+            except Exception:
+                pass
+
         # Auth success
         if mtype == "success" and data.get("message") == "Authenticated":
             self.is_authenticated = True
@@ -212,6 +219,26 @@ class DeltaWSClient:
                     core = symbol.split(":", 1)[1]
                     with self._lock:
                         self._latest_mark[core] = price_f
+            return
+
+        # Some deployments may use ticker channel name variations; capture them if present
+        if mtype in {"ticker", "v2/ticker"}:
+            # Attempt to normalise to mark price if mark field provided
+            try:
+                symbol = data.get("symbol") or data.get("product_symbol")
+                mark_price = data.get("mark_price") or data.get("mark")
+                if symbol and mark_price is not None:
+                    core = str(symbol).replace("MARK:", "")
+                    price_f = None
+                    try:
+                        price_f = float(mark_price)
+                    except Exception:
+                        pass
+                    if price_f is not None:
+                        with self._lock:
+                            self._latest_mark[core] = price_f
+            except Exception:
+                pass
             return
 
         # Private: positions updates
