@@ -112,6 +112,11 @@ class DeltaWSClient:
         }
         self._send_or_queue(subs)
 
+    def enable_heartbeat(self):
+        """Ask server to send heartbeat messages periodically."""
+        hb = {"type": "enable_heartbeat"}
+        self._send_or_queue(hb, require_auth=False)
+
     # Safe getters
     def get_latest_mark(self, symbol: str) -> Optional[float]:
         with self._lock:
@@ -153,6 +158,12 @@ class DeltaWSClient:
                 self._send_auth(ws)
             except Exception as e:
                 self.logger.error(f"Failed to send auth: {e}")
+
+        # Enable heartbeat to detect connection drops reliably
+        try:
+            self.enable_heartbeat()
+        except Exception:
+            pass
 
         # Flush any queued messages (e.g., public subscriptions)
         self._flush_outbox(ws)
@@ -205,12 +216,11 @@ class DeltaWSClient:
 
         # Private: positions updates
         if mtype == "positions":
-            # Data shape may vary; handle dict or list forms
-            payload = data
-            # Try to normalize to list of position dicts
+            # Data shape may vary; normalize to list of position dicts
+            payload = data.get("result") or data.get("positions") or data.get("data") or data
             items: List[Dict[str, Any]]
-            if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], list):
-                items = payload["result"]
+            if isinstance(payload, list):
+                items = payload
             elif isinstance(payload, dict):
                 items = [payload]
             else:
@@ -225,10 +235,10 @@ class DeltaWSClient:
 
         # Private: orders updates
         if mtype == "orders":
-            payload = data
+            payload = data.get("result") or data.get("orders") or data.get("data") or data
             items2: List[Dict[str, Any]]
-            if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], list):
-                items2 = payload["result"]
+            if isinstance(payload, list):
+                items2 = payload
             elif isinstance(payload, dict):
                 items2 = [payload]
             else:

@@ -1,0 +1,25 @@
+{% if orders %}
+  <table>
+    <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Size</th><th>Price</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for oid, od in orders.items() %}
+      <tr>
+        <td>{{ oid }}</td>
+        <td>{{ od.product_symbol or od.get('product_symbol') }}</td>
+        <td>{{ od.side or od.get('side') }}</td>
+        <td>{{ od.size or od.get('size') }}</td>
+  <td>{{ od.limit_price or od.get('limit_price') or od.price or od.get('price') or od.get('average_fill_price') }}</td>
+        <td>{{ od.state or od.get('state') }}</td>
+        <td>
+          <form method="post" action="/orders/cancel">
+            <input type="hidden" name="order_id" value="{{ oid }}" />
+            <button type="submit">Cancel</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="placeholder">No open orders</div>
+{% endif %}

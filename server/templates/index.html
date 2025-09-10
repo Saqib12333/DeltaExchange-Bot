@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid">
+  <div class="card">
+    <h2>Mark Price (BTCUSD)</h2>
+  <div id="mark" hx-ext="ws" hx-ws="connect:/ws/mark">
+      {% include "_mark.html" %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Balances</h2>
+  <div id="balances" hx-ext="ws" hx-ws="connect:/ws/balances">
+      {% include "_balances.html" %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Positions</h2>
+  <div id="positions" hx-ext="ws" hx-ws="connect:/ws/positions">
+      {% include "_positions.html" %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Open Orders</h2>
+  <div id="orders" hx-ext="ws" hx-ws="connect:/ws/orders">
+      {% include "_orders.html" %}
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Place Maker-Only Order</h2>
+  <form method="post" action="/orders/place" class="form-row">
+    <label>Symbol <input type="text" name="product_symbol" value="BTCUSD" required></label>
+    <label>Side
+      <select name="side">
+        <option value="buy">Buy</option>
+        <option value="sell">Sell</option>
+      </select>
+    </label>
+    <label>Size <input type="number" name="size" value="1" min="1" required></label>
+    <label>Limit Price <input type="number" name="limit_price" step="0.5" placeholder="optional"></label>
+    <button type="submit">Place</button>
+  </form>
+</section>
+
+{% endblock %}

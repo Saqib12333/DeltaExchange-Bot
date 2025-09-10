@@ -1,0 +1,5 @@
+{% if mark %}
+  <div class="metric">${{ '%.2f'|format(mark) }}</div>
+{% else %}
+  <div class="metric metric--loading">Loading...</div>
+{% endif %}
