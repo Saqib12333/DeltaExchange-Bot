@@ -22,10 +22,8 @@ class DeltaWSClient:
     Thread-safe, reconnecting, and stateful. Intended for use as a singleton in Streamlit via @st.cache_resource.
     """
 
-    def __init__(self, use_testnet: bool = False):
-        self.ws_url = (
-            "wss://socket-ind.testnet.deltaex.org" if use_testnet else "wss://socket.india.delta.exchange"
-        )
+    def __init__(self):
+        self.ws_url = "wss://socket.india.delta.exchange"
         self.ws = None
         self._thread = None
 
@@ -89,14 +87,17 @@ class DeltaWSClient:
 
     # Subscriptions
     def subscribe_mark(self, symbols: List[str]):
-        payload = {
-            "type": "subscribe",
-            "payload": {
-                "channels": [
-                    {"name": "mark_price", "symbols": [f"MARK:{s}" for s in symbols]}
-                ]
-            },
-        }
+        # Subscribe to both mark_price and ticker as a fallback in case one channel is unavailable
+        channels = [
+            {"name": "mark_price", "symbols": [f"MARK:{s}" for s in symbols]},
+            {"name": "ticker", "symbols": symbols},
+        ]
+        payload = {"type": "subscribe", "payload": {"channels": channels}}
+        if os.getenv("DELTA_WS_DEBUG", "false").lower() in {"1", "true", "yes"}:
+            try:
+                self.logger.info(f"WS send subscribe payload={payload}")
+            except Exception:
+                pass
         self._send_or_queue(payload)
 
     def subscribe_private_channels(self):

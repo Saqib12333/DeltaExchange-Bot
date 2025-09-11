@@ -2,6 +2,7 @@ import os
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
+import logging
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,16 +21,13 @@ load_dotenv()
 # -------------------- Config --------------------
 API_KEY = os.getenv("DELTA_API_KEY")
 API_SECRET = os.getenv("DELTA_API_SECRET")
-USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() in ("1", "true", "yes")
-BASE_URL = os.getenv(
-    "DELTA_BASE_URL",
-    "https://cdn-ind.testnet.deltaex.org" if USE_TESTNET else "https://api.india.delta.exchange",
-)
-MOCK_DELTA = os.getenv("MOCK_DELTA", "false").lower() in ("1", "true", "yes")
+BASE_URL = os.getenv("DELTA_BASE_URL", "https://api.india.delta.exchange")
 
 
 # -------------------- FastAPI app --------------------
 app = FastAPI(title="Delta Exchange Bot - FastAPI")
+logger = logging.getLogger("delta.app")
+logging.basicConfig(level=logging.INFO)
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -89,10 +87,10 @@ manager = ConnectionManager()
 
 
 class DataService:
-    """Abstraction over Delta clients with optional mock mode."""
+    """Abstraction over Delta clients (real-only; mock removed)."""
 
     def __init__(self):
-        self.mock = MOCK_DELTA or not (API_KEY and API_SECRET)
+        self.mock = False  # mock removed
         self.rest_client: Optional[DeltaExchangeClient] = None
         self.ws_client: Optional[DeltaWSClient] = None
         self.snapshot = Snapshot(balances={}, positions={}, orders={}, marks={}, version=0)
@@ -101,19 +99,33 @@ class DataService:
         self._stop = asyncio.Event()
 
     async def start(self):
-        if self.mock:
-            # Start mock data generator
-            self._task = asyncio.create_task(self._mock_loop())
-            return
-        # Real clients
+        # Real clients only
+        if not API_KEY or not API_SECRET:
+            raise RuntimeError("DELTA_API_KEY / DELTA_API_SECRET must be set (mock mode removed)")
+
         self.rest_client = DeltaExchangeClient(API_KEY, API_SECRET, base_url=BASE_URL)
-        self.ws_client = DeltaWSClient(use_testnet=USE_TESTNET)
+        self.ws_client = DeltaWSClient()
         self.ws_client.configure_auth(API_KEY, API_SECRET)
         self.ws_client.connect()
         # Subscribe channels
         self.ws_client.subscribe_mark(["BTCUSD"])  # default symbol for UI
-        # Background loop to capture WS snapshots and REST balances
+
+        # Startup auth sanity check (balances endpoint requires valid key)
+        try:
+            bal_probe = self.rest_client.get_account_balance()
+            if not (isinstance(bal_probe, dict) and bal_probe.get("success")):
+                code = None
+                if isinstance(bal_probe, dict):
+                    code = (bal_probe.get("error") or {}).get("code") if isinstance(bal_probe.get("error"), dict) else None
+                masked = API_KEY[:4] + "***" + API_KEY[-4:]
+                logger.warning(f"Startup auth check failed (code={code}) for key {masked} base_url={BASE_URL}")
+        except Exception as e:
+            masked = API_KEY[:4] + "***" + API_KEY[-4:]
+            logger.error(f"Startup auth exception for key {masked}: {e}")
+
+        # Launch background loop
         self._task = asyncio.create_task(self._real_loop())
+        logger.info("DataService.start() scheduled _real_loop task id=%s", id(self._task))
 
     async def stop(self):
         self._stop.set()
@@ -125,20 +137,29 @@ class DataService:
 
     async def _real_loop(self):
         assert self.rest_client is not None and self.ws_client is not None
-        prev = None
+        prev: Optional[Dict[str, Any]] = None
         last_bal_pull = 0.0
-        last_rest_mark_pull = 0.0
+        last_rest_mark_pull = -10.0
         ws_mark_seen = False
+        first_broadcast_done = False
+        tick = 0
+
+        logger.info("_real_loop entered: starting main data aggregation loop")
+
         while not self._stop.is_set():
             try:
-                # Mark price from WS
+                if prev is None:
+                    logger.info("Loop first iteration starting (tick=%s)", tick)
+
+                # Mark price
                 marks: Dict[str, float] = {}
                 price = self.ws_client.get_latest_mark("BTCUSD")
                 if price is not None:
                     marks["BTCUSD"] = float(price)
                     ws_mark_seen = True
+                elif os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes"):
+                    logger.info("No WS price yet")
 
-                # REST fallback if WS mark not yet received after a short grace period (e.g., cold start)
                 loop_now = asyncio.get_running_loop().time()
                 if not ws_mark_seen and loop_now - last_rest_mark_pull > 5:
                     last_rest_mark_pull = loop_now
@@ -146,14 +167,13 @@ class DataService:
                         rest_mark = self.rest_client.get_mark_price("BTCUSD")
                         if isinstance(rest_mark, dict) and rest_mark.get("success") and rest_mark.get("mark_price"):
                             marks["BTCUSD"] = float(rest_mark["mark_price"])
+                            logger.info("REST mark fallback pulled price=%s", marks["BTCUSD"])
                     except Exception:
                         pass
 
-                # Private snapshots from WS (preferred)
+                # Positions / Orders
                 positions = self.ws_client.get_positions() if hasattr(self.ws_client, "get_positions") else {}
                 orders = self.ws_client.get_orders() if hasattr(self.ws_client, "get_orders") else {}
-
-                # If empty, fallback to REST briefly to hydrate
                 if not positions:
                     try:
                         pos_resp = self.rest_client.get_positions()
@@ -162,7 +182,6 @@ class DataService:
                             positions = {p.get("product_symbol"): p for p in pos_list if p.get("product_symbol")}
                     except Exception:
                         pass
-
                 if not orders:
                     try:
                         ord_resp = self.rest_client.get_orders()
@@ -172,18 +191,17 @@ class DataService:
                     except Exception:
                         pass
 
-                # Pull balances every 30s
+                # Balances
                 now = asyncio.get_running_loop().time()
                 balances = self.snapshot.balances
-                if now - last_bal_pull > 30:
+                if prev is None or now - last_bal_pull > 30:
                     last_bal_pull = now
                     try:
                         bal_resp = self.rest_client.get_account_balance()
                         if isinstance(bal_resp, dict) and bal_resp.get("success"):
-                            # Transform list to dict keyed by asset symbol
                             result = bal_resp.get("result") or []
                             if isinstance(result, list):
-                                transformed = {
+                                balances = {
                                     (row.get("asset_symbol") or row.get("symbol") or ""): {
                                         "available_balance": row.get("available_balance"),
                                         "total_balance": row.get("balance") or row.get("total_balance"),
@@ -191,7 +209,7 @@ class DataService:
                                     for row in result
                                     if (row.get("asset_symbol") or row.get("symbol"))
                                 }
-                                balances = transformed
+                                logger.info("Pulled balances count=%s", len(balances))
                     except Exception:
                         pass
 
@@ -199,9 +217,14 @@ class DataService:
                     "marks": marks,
                     "positions": positions,
                     "orders": orders,
-                    # keep last balances if empty
                     "balances": balances or self.snapshot.balances,
                 }
+
+                if prev is None:
+                    await self._broadcast_all()
+                    first_broadcast_done = True
+                    logger.info("Initial forced broadcast executed (may be empty) tick=%s", tick)
+
                 if snap != prev:
                     async with self._lock:
                         self.snapshot.marks = marks
@@ -210,59 +233,42 @@ class DataService:
                         self.snapshot.balances = snap["balances"]
                         self.snapshot.version += 1
                     prev = snap
-                    # Schedule broadcasts
                     await self._broadcast_all()
+                    first_broadcast_done = True
+                    logger.info(
+                        "Broadcast v%s tick=%s marks=%d positions=%d orders=%d balances=%d ws_mark=%s",
+                        self.snapshot.version,
+                        tick,
+                        len(self.snapshot.marks),
+                        len(self.snapshot.positions),
+                        len(self.snapshot.orders),
+                        len(self.snapshot.balances),
+                        ws_mark_seen,
+                    )
                 else:
-                    # Light debug when nothing updates for several cycles while WS mark missing
                     if os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes") and not ws_mark_seen:
                         try:
                             print("[DEBUG] Waiting for first mark price... snapshot version", self.snapshot.version)
                         except Exception:
                             pass
-            except Exception:
-                # Avoid tight error loops
+                    if not first_broadcast_done and self.snapshot.version == 0:
+                        try:
+                            await self._broadcast_all()
+                            first_broadcast_done = True
+                            logger.info("Forced initial broadcast with empty snapshot to populate UI placeholders tick=%s", tick)
+                        except Exception:
+                            pass
+                tick += 1
+            except Exception as e:
+                try:
+                    import traceback
+                    tb = traceback.format_exc()
+                    logger.error("_real_loop iteration error: %s\n%s", e, tb)
+                except Exception:
+                    pass
                 await asyncio.sleep(0.5)
             await asyncio.sleep(1.0)
-
-    async def _mock_loop(self):
-        import random
-        # Start with deterministic values
-        price = 60000.0
-        t = 0
-        while not self._stop.is_set():
-            # simple random walk
-            price += random.uniform(-5, 5)
-            t += 1
-            positions = {
-                "BTCUSD": {
-                    "product_symbol": "BTCUSD",
-                    "size": 1,
-                    "entry_price": 60000.0,
-                    "direction": "buy",
-                }
-            }
-            orders = {
-                "1": {
-                    "id": 1,
-                    "product_symbol": "BTCUSD",
-                    "price": round(price + 100, 2),
-                    "size": 1,
-                    "side": "sell",
-                    "state": "open",
-                }
-            }
-            balances = {"BTC": {"available_balance": 0.1, "total_balance": 0.1}}
-            async with self._lock:
-                self.snapshot.marks = {"BTCUSD": round(price, 2)}
-                self.snapshot.positions = positions
-                self.snapshot.orders = orders
-                self.snapshot.balances = balances
-                self.snapshot.version += 1
-            await self._broadcast_all()
-            await asyncio.sleep(0.75)
-
     async def _broadcast_all(self):
-        # Render and broadcast separate sections
         html_mark = templates.get_template("_mark.html").render(mark=self.snapshot.marks.get("BTCUSD"))
         html_bal = templates.get_template("_balances.html").render(balances=self.snapshot.balances)
         html_pos = templates.get_template("_positions.html").render(positions=self.snapshot.positions, marks=self.snapshot.marks)
@@ -296,10 +302,7 @@ async def _on_shutdown():
 async def index(request: Request):
     return templates.TemplateResponse(
         "index.html",
-        {
-            "request": request,
-            "use_testnet": USE_TESTNET,
-        },
+    {"request": request},
     )
 
 
@@ -311,9 +314,7 @@ async def place_order(
     limit_price: Optional[float] = Form(None),
     service: DataService = Depends(get_service),
 ):
-    # In mock mode, just acknowledge
-    if service.mock:
-        return RedirectResponse("/", status_code=303)
+    # Real mode only
     # Find product id via REST
     assert service.rest_client is not None
     pid = None
@@ -340,16 +341,54 @@ async def place_order(
 
 @app.post("/orders/cancel")
 async def cancel_order(
+    request: Request,
     order_id: str = Form(...),
     service: DataService = Depends(get_service),
 ):
-    if service.mock:
-        return RedirectResponse("/", status_code=303)
+    # Real mode only
     assert service.rest_client is not None
+    try:
+        logger.info("/orders/cancel headers=%s", dict(request.headers))
+    except Exception:
+        pass
+    # Optimistic removal: drop from current snapshot immediately so HTMX swap hides it fast
+    try:
+        async with service._lock:  # type: ignore[attr-defined]
+            if order_id in service.snapshot.orders:
+                service.snapshot.orders.pop(order_id, None)
+                service.snapshot.version += 1
+    except Exception:
+        pass
     try:
         service.rest_client.cancel_order(order_id=int(order_id))
     except Exception:
+        logger.warning("Cancel order failed order_id=%s", order_id)
+
+    # Refresh orders immediately via REST (fast path) so UI reflects cancel without waiting for WS
+    try:
+        ord_resp = service.rest_client.get_orders()
+        orders: Dict[str, Any] = {}
+        if isinstance(ord_resp, dict) and ord_resp.get("success"):
+            for o in (ord_resp.get("result") or []):
+                if o.get("id") is not None:
+                    orders[str(o.get("id"))] = o
+        async with service._lock:  # type: ignore[attr-defined]
+            service.snapshot.orders = orders
+            service.snapshot.version += 1
+    except Exception as e:
+        logger.error("Failed to refresh orders after cancel: %s", e)
+
+    # Render partial (orders may be empty)
+    html_ord = templates.get_template("_orders.html").render(orders=service.snapshot.orders)
+    # Broadcast so other connected clients update too
+    try:
+        await manager.broadcast("orders", html_ord)
+    except Exception:
         pass
+
+    if request.headers.get("hx-request") == "true":
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(html_ord)
     return RedirectResponse("/", status_code=303)
 
 

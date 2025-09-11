@@ -1,30 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="grid">
-  <div class="card">
+<section class="dashboard">
+  <div class="panel panel--wide">
     <h2>Mark Price (BTCUSD)</h2>
-  <div id="mark" hx-ext="ws" hx-ws="connect:/ws/mark">
+    <div id="mark" class="ws-box" hx-ext="ws" hx-ws="connect:/ws/mark">
       {% include "_mark.html" %}
     </div>
   </div>
-
-  <div class="card">
+  <div class="panel">
     <h2>Balances</h2>
-  <div id="balances" hx-ext="ws" hx-ws="connect:/ws/balances">
+    <div id="balances" class="scroll" hx-ext="ws" hx-ws="connect:/ws/balances">
       {% include "_balances.html" %}
     </div>
   </div>
-
-  <div class="card">
+  <div class="panel">
     <h2>Positions</h2>
-  <div id="positions" hx-ext="ws" hx-ws="connect:/ws/positions">
+    <div id="positions" class="scroll" hx-ext="ws" hx-ws="connect:/ws/positions">
       {% include "_positions.html" %}
     </div>
   </div>
-
-  <div class="card">
+  <div class="panel">
     <h2>Open Orders</h2>
-  <div id="orders" hx-ext="ws" hx-ws="connect:/ws/orders">
+    <div id="orders" class="scroll" hx-ext="ws" hx-ws="connect:/ws/orders">
       {% include "_orders.html" %}
     </div>
   </div>

@@ -3,13 +3,17 @@
     <thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>PNL</th></tr></thead>
     <tbody>
       {% for sym, pos in positions.items() %}
-      {% set entry = pos.entry_price or pos.get('entry_price') %}
-      {% set raw_size = pos.size or pos.get('size') %}
-      {% set mark = marks.get(sym) %}
+  {# Safely coerce numeric fields that may arrive as strings #}
+  {% set _entry_raw = pos.entry_price if pos.entry_price is not none else pos.get('entry_price') %}
+  {% set _size_raw = pos.size if pos.size is not none else pos.get('size') %}
+  {% set _mark_raw = marks.get(sym) %}
+  {% set entry = (_entry_raw|float) if _entry_raw is not none else None %}
+  {% set raw_size = (_size_raw|float) if _size_raw is not none else None %}
+  {% set mark = (_mark_raw|float) if _mark_raw is not none else None %}
       {# Infer side from explicit direction, otherwise from size sign #}
       {% set side = (pos.direction or pos.get('direction')) if (pos.direction or pos.get('direction')) else ('sell' if raw_size is not none and raw_size < 0 else 'buy') %}
       {# PnL formula: (mark - entry) * size works for both long(+) and short(-) #}
-      {% set pnl = (mark - entry) * raw_size if (mark is not none and entry is not none and raw_size is not none) else None %}
+  {% set pnl = (mark - entry) * raw_size if (mark is not none and entry is not none and raw_size is not none) else None %}
       <tr>
         <td>{{ sym }}</td>
         <td>{{ side }}</td>

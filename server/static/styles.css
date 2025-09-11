@@ -5,6 +5,24 @@ header h1 { margin: 0; font-size: 18px; }
 header small { color: #8ea0ff; font-weight: 600; margin-left: 8px; }
 main { padding: 16px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+/* New responsive dashboard layout */
+.dashboard { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
+.panel { background: #161a24; border: 1px solid #262b3b; border-radius: 10px; padding: 10px 12px 8px; display: flex; flex-direction: column; min-height: 170px; max-height: 360px; overflow: hidden; }
+.panel--wide { grid-column: span 2; }
+@media (max-width: 1100px) { .panel--wide { grid-column: span 1; } }
+.panel h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: .5px; color: #9aa4bf; font-weight: 600; display:flex; align-items:center; gap:6px; }
+.scroll { overflow:auto; scrollbar-width: thin; }
+.scroll::-webkit-scrollbar { width:8px; }
+.scroll::-webkit-scrollbar-track { background: #0f1117; }
+.scroll::-webkit-scrollbar-thumb { background: #262b3b; border-radius: 4px; }
+.ws-box { min-height: 64px; display:flex; align-items:center; }
+table { table-layout: fixed; word-break: break-word; }
+td, th { vertical-align: top; }
+.panel table td:last-child { width: 90px; }
+
+/* Order cancel button inline style adjustments */
+.order-cancel-btn { background:#b91c1c; border-color:#b91c1c; font-size:12px; padding:4px 8px; }
+.order-cancel-btn:hover { filter:brightness(1.15); }
 .card { background: #161a24; border: 1px solid #262b3b; border-radius: 10px; padding: 12px 12px 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 .metric { font-size: 32px; font-weight: 700; color: #b2f5ea; }
 .metric--loading { color: #888; }
