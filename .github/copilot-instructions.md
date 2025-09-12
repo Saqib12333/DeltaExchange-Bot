@@ -1,69 +1,55 @@
-# Delta Exchange Bot — AI Agent Guide
-Version: 3.1.0
+## Delta Exchange Bot – AI Agent Guide (v4.1)
+Purpose: Give an AI agent just enough project‑specific context to safely extend or debug the trading dashboard without re‑deriving architecture.
 
-## Big picture
-- Streamlit dashboard (`app.py`, root) reads from REST + WebSocket clients in `src/` and includes maker-only order placement and per-order cancel.
-- REST client: `src/delta_client.py` (HMAC auth fixed; rate-limited; JSON errors preserved).
-- WS client: `src/ws_client.py` (public `mark_price` feed; WS-first pricing with REST fallback).
-- Docs: `docs/Delta-API-Docs.md`, `docs/strategy/stratergy.md`, `docs/notes/issues.md`.
-- Why this layout: keep `app.py` runnable via `streamlit run app.py`; isolate clients under `src/` for reuse.
+### 1. Architecture (why it looks this way)
+- FastAPI + HTMX + WebSockets (in `server/main.py`) push pre‑rendered Jinja partials → no full reruns, minimal flicker (Streamlit `app.py` kept only as legacy).
+- Data flow: Delta WS (mark, orders, positions) → in‑memory snapshots → render partial templates (`server/templates/_*.html`) → broadcast over topic WS endpoints (`/ws/mark|balances|positions|orders`). Balances lack a private WS channel, so REST polls every ~30s.
+- Separation: `src/ws_client.py` handles resilient WS (auth + heartbeat + private subs). `src/delta_client.py` handles signed REST (HMAC, rate limiting, IPv4 force option) and REST fallbacks when WS not yet hydrated.
 
-## Runbook (Windows PowerShell)
-- Environment: `.env` in repo root (DELTA_API_KEY/SECRET, USE_TESTNET, DELTA_BASE_URL, TESTNET_API_URL, DELTA_DEBUG_AUTH).
-- Install: `pip install -r requirements.txt` (uses `websocket-client`, `streamlit`, etc.).
-- Run: `streamlit run app.py` (auto-refresh 1s; no manual toggles). .env is loaded by default; production is the default unless `USE_TESTNET=true`.
-- Imports in `app.py` use the new paths: `from src.delta_client import DeltaExchangeClient`, `from src.ws_client import DeltaWSClient`.
+### 2. Environment & Modes
+- `.env` keys: `DELTA_API_KEY`, `DELTA_API_SECRET`, `USE_TESTNET`, `DELTA_BASE_URL`, optional `DELTA_FORCE_IPV4`, `DELTA_DEBUG_AUTH`, `MOCK_DELTA`.
+- Mock mode: if `MOCK_DELTA=true` OR no keys → deterministic synthetic price (~60k), 1 long position, 1 open order. Disable for real data before validating numbers.
+- Testnet vs prod: set `USE_TESTNET`; URLs auto‑switch; only override if Delta changes CDN endpoints.
 
-## Integration patterns that matter
-- Auth signature (fixed): include `?` between path and query when signing if params exist.
-  - Message: `method + timestamp + path + ('?' + query if present) + body`.
-  - Public GETs (e.g., `/v2/products`, `/v2/history/candles`) must NOT send auth headers.
-- Rate limit decorator in REST client wraps key calls (3–5 rps) to stay under API limits.
-- Mark price is WS-first: subscribe to `mark_price` channel for `MARK:BTCUSD`; fallback to `/v2/history/candles` with `symbol=MARK:BTCUSD`.
-- Streamlit caching: `@st.cache_data(ttl=30)` for balances; `ttl=5` for positions/orders; `@st.cache_resource` for singletons (REST/WS clients). Use underscore param names in cached funcs to avoid unhashable errors.
+### 3. Auth & Request Rules (critical)
+- Signature string: `method + timestamp + path + ('?' + query if query) + body` (body = compact JSON used verbatim in request). Public GETs (products, candles, orderbook) must NOT include auth headers.
+- WS auth: send `type=auth` with HMAC of `GET + timestamp + /live` before subscribing to private `orders`/`positions`.
+- Avoid duplicate WS connections—reuse the singleton `DeltaWSClient` inside `DataService`.
 
-### Strategy seed-phase (startup invariant)
-- On startup, assume one open position of 1 lot at entry price x and exactly two live orders:
-  - Same-direction averaging: size 2 at x ∓ 750 (for LONG: x − 750; for SHORT: x + 750).
-  - Opposite TP + Flip: size 2 at x ± 300 (for LONG: SHORT 2 at x + 300; for SHORT: BUY 2 at x − 300).
-- After any fill: immediately cancel the paired order, update state, and re-place the two orders for the new state.
+### 4. Update Loop Semantics
+- `DataService._real_loop`: every ~1s collects mark/positions/orders from WS; if positions/orders empty (startup gap) it hydrates once via REST. Balances updated when 30s elapsed. Only broadcasts when a diff vs previous snapshot (simple dict compare) to cut chatter.
+- PnL in `_positions.html`: computed as `(mark - entry) * size` (size sign conveys long/short). Side inferred from explicit direction or size sign.
 
-## Minimal examples from this repo
-- Cache WS client singleton and subscribe once:
-```python
-@st.cache_resource
-def get_ws_client(base_url: str):
-    use_testnet = 'testnet' in base_url.lower()
-    ws = DeltaWSClient(use_testnet=use_testnet)
-    ws.connect(); ws.subscribe_mark(["BTCUSD"])
-    return ws
-```
-- WS-first mark price with REST fallback:
-```python
-ws_price = ws_client.get_latest_mark('BTCUSD')
-if not ws_price and client:
-    rest = client.get_mark_price('BTCUSD')  # returns {'success': True, 'mark_price': float}
-```
-- REST signature generation (see `_generate_signature` in `src/delta_client.py`).
+### 5. Key Files Cheat Sheet
+- `server/main.py`: lifecycle (startup hooks), maker‑only order route, cancel route, WS topic endpoints, mock vs real loop.
+- `server/templates/_mark.html`, `_balances.html`, `_positions.html`, `_orders.html`: partials—modify formatting ONLY here; keep business logic in Python.
+- `src/delta_client.py`: REST helpers (`get_positions`, `get_orders`, `place_order`, `cancel_order` with multi‑strategy fallbacks, `get_mark_price` via candles `MARK:SYMBOL`). Rate limiting decorator present—respect or extend rather than remove.
+- `src/ws_client.py`: Threaded WS client (heartbeat, auth, subscriptions queue). Use `subscribe_mark(["BTCUSD"])` (client prefixes MARK: internally). State getters copy data under a lock.
 
-## File touchpoints you’ll likely edit
-- `app.py`: UI cards/layout, 1s auto-refresh loop, WS-first price display, PnL calc.
-- `src/delta_client.py`: Add/adjust REST endpoints; keep auth rules and public-GET exemption.
-- `src/ws_client.py`: Subscriptions or additional channels; keep thread-safety and reconnect logic.
-- `docs/strategy/stratergy.md`: Strategy spec reference for Phase 2 automation.
+### 6. Common Pitfalls / Gotchas
+- Wrong numbers usually mean mock mode still on—check `MOCK_DELTA` before debugging math.
+- Signature mismatches: nearly always missing the `?` before query string in message assembly, or pretty‑printed JSON vs compact when signing.
+- IPv6 whitelist errors → set `DELTA_FORCE_IPV4=true` (monkeypatches urllib3 address family).
+- Multiple uvicorn reload workers can race the singleton; for debugging real data prefer running without `--reload`.
+- Don’t broadcast inside templates; always let `_broadcast_all()` handle rendering.
 
-## External endpoints and URLs
-- REST: prod `https://api.india.delta.exchange`, testnet `https://cdn-ind.testnet.deltaex.org`.
-- WS: prod `wss://socket.india.delta.exchange`, testnet `wss://socket-ind.testnet.deltaex.org`.
+### 7. Adding Features (examples)
+- New symbol support: subscribe in `DataService.start()` via `self.ws_client.subscribe_mark(["BTCUSD","ETHUSD"])`, extend templates to iterate marks, adjust forms.
+- Additional REST data (e.g., fills): add REST call inside the loop with its own throttle; only include in snapshot + broadcast when changed.
+- Strategy engine (future): build separate module (e.g., `strategy/engine.py`) consuming snapshots and placing orders through `rest_client`; keep side‑effects out of template layer.
 
-## Gotchas
-- Don’t send auth headers for public GET endpoints.
-- When adding GET params, build `url?...` and also include `'?'+query` in signature.
-- Keep Streamlit cache params hashable; pass clients via underscore args (e.g., `_client`).
-- Avoid multiple WS connections: always go through the cached resource.
+### 8. Testing & Debugging
+- (Planned) Playwright E2E: run with `MOCK_DELTA=true` to assert deterministic layout & live updates. Install once: `python -m playwright install --with-deps`.
+- Quick sanity: disable mock, start server, confirm mark price ≠ 60000 region and positions/orders reflect account.
+- Enable auth debug: set `DELTA_DEBUG_AUTH=true` to log the exact signature string.
 
-## Contact
-- Owner: Saqib Sherwani (sole maintainer)
-- GitHub: https://github.com/Saqib12333
-- Email: sherwanisaqib@gmail.com
-- Avatar: https://github.com/Saqib12333.png?size=200
+### 9. Safe Editing Practices
+- Preserve rate limiting; wrap new high‑frequency REST calls with `@rate_limit`.
+- Avoid blocking calls in async loop—keep REST sync but sparse; heavy logic move to thread/task if needed.
+- Keep secrets out of commits (.env is user‑local). Never echo actual keys in logs or docs.
+
+### 10. Contact
+Sole maintainer: Saqib Sherwani — GitHub @Saqib12333 — sherwanisaqib@gmail.com
+
+---
+If anything here seems stale while coding (e.g., Delta alters channel names), search `docs/Delta-API-Docs.md` then update this guide minimally.

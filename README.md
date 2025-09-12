@@ -1,11 +1,11 @@
 # 🚀 Delta Exchange Trading Bot
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Streamlit](https://img.shields.io/badge/streamlit-1.0+-red.svg)](https://streamlit.io/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-HTMX-green.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-3.1.0-informational.svg)](#)
+[![Version](https://img.shields.io/badge/version-4.3.0-informational.svg)](#)
 
-A powerful cryptocurrency trading automation system for Delta Exchange India, featuring real-time portfolio monitoring and a planned automated strategy engine.
+A powerful cryptocurrency trading automation system for Delta Exchange India, featuring a flicker-free FastAPI + HTMX live dashboard and a planned automated strategy engine.
 
 ![Dashboard Preview](https://via.placeholder.com/800x400/1f77b4/ffffff?text=Delta+Exchange+Dashboard)
 
@@ -15,7 +15,7 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 - **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
 - **Position Tracking** - View open positions with accurate P&L calculations using real mark prices
 - **Order Management** - Track all open orders with properly formatted status information
- - **Order Actions** - Place maker-only (post-only) limit orders and cancel specific open orders
+ - **Order Actions** - Place maker-only (post-only) limit orders and cancel specific open orders (cancel uses canonical batch API endpoint with symbol context + toast confirmation)
 - **BTCUSD Mark Price** - Real-time accurate price monitoring with status indicators
 - **1s Auto-Refresh** - Fixed 1-second refresh cadence (no manual controls)
 - **WebSocket Mark Price** - Live WS feed for BTCUSD with REST candles as fallback
@@ -43,6 +43,7 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 - **UI Simplification**: Removed manual refresh controls and redundant tables; card-first UI.
 - **Auto-Refresh**: Fixed 1-second auto-refresh with countdown placeholder and safe rerun.
 - **Rate Limiting & Timeouts**: Added decorators and consistent 30s request timeouts.
+- **Canonical Cancel Path**: Standardized single-order cancel to use `DELETE /v2/orders/batch` (`{orders:[{id}], product_symbol}`) after `/v2/orders/{id}` returned 404s in this deployment. Path retained only as guarded fallback. UI now shows a lightweight “Order cancelled” toast.
 
 ## 🚀 Quick Start
 
@@ -87,13 +88,19 @@ DELTA_DEBUG_AUTH=false
    - Get IPv6: `curl https://api6.ipify.org`
 4. Copy your API key and secret to the `.env` file
 
-### 5. Run the Application
+### 5. Run the Application (FastAPI + HTMX)
 ```bash
 # Windows PowerShell (optional venv shown):
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+python -m uvicorn server.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Legacy Streamlit UI (optional):
+
+```bash
 streamlit run app.py
 ```
 
@@ -111,8 +118,8 @@ The dashboard will automatically test your API connection and display the status
 - **BTCUSD Mark Price**: Live price feed with status indicators (Live/Loading/Error)
 
 ### Refresh Behavior
-- Auto-Refresh: Fixed at 1 second for a live experience (no manual controls)
-- Optimized: Smart caching for positions/orders; mark price via WebSocket (REST fallback)
+- Event-driven: HTMX WebSocket updates re-render only the changed section
+- Optimized: Mark price and private channels via WS; balances via REST on a slower cadence
 
 ### Performance Characteristics
 - Low CPU usage in practice with 1s cadence and caching
@@ -167,6 +174,10 @@ Always test your strategy thoroughly on testnet before switching to production!
 ```
 DeltaExchange-Bot/
 ├── app.py               # Main dashboard (place/cancel maker-only orders + portfolio)
+├── server/
+│   ├── main.py          # FastAPI app (HTMX + WS server)
+│   ├── templates/       # Jinja2 templates (partials and layout)
+│   └── static/          # CSS/JS assets
 ├── src/
 │   ├── delta_client.py  # Delta Exchange REST API client
 │   └── ws_client.py     # WebSocket client for mark_price feed (WS-first pricing)
@@ -201,6 +212,16 @@ ws = DeltaWSClient(use_testnet=True).connect()
 ws.subscribe_mark(["BTCUSD"])  # Client will send MARK:BTCUSD under the hood
 price = ws.get_latest_mark("BTCUSD")
 ws.close()
+
+## 🧪 End-to-end test (Playwright)
+
+We provide a basic Playwright test that runs the server in mock mode and validates live updates.
+
+```bash
+pip install -r requirements.txt
+python -m playwright install --with-deps  # one-time
+pytest -q tests/test_e2e_playwright.py
+```
 ```
 
 ## 🛡️ Security Best Practices

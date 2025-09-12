@@ -1,0 +1,16 @@
+{% if balances %}
+  <table>
+    <thead><tr><th>Asset</th><th>Available</th><th>Total</th></tr></thead>
+    <tbody>
+      {% for asset, row in balances.items() %}
+      <tr>
+        <td>{{ asset }}</td>
+        <td>{{ row.available_balance }}</td>
+        <td>{{ row.total_balance }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="placeholder">No data</div>
+{% endif %}

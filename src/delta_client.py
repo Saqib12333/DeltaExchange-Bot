@@ -148,8 +148,8 @@ class DeltaExchangeClient:
 
         headers = {
             'Content-Type': 'application/json',
-            # Provide a stable UA to avoid occasional CDN 4xx blocks
-            'User-Agent': 'DeltaBot/3.0 maker-tester'
+            'Accept': 'application/json',
+            'User-Agent': 'DeltaBot/3.1 cancel-diagnostics'
         }
 
         # Only sign/authenticate non-public endpoints
@@ -163,17 +163,11 @@ class DeltaExchangeClient:
 
         try:
             if method == 'GET':
-                # Use the full URL with query string, no separate params
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
             elif method == 'POST':
-                # Send the exact JSON string we signed to avoid signature mismatch
                 response = self.session.post(url, headers=headers, data=body if body else None, timeout=self.timeout)
             elif method == 'DELETE':
-                # Send the exact JSON string we signed (if any)
-                if data is not None and body:
-                    response = self.session.delete(url, headers=headers, data=body, timeout=self.timeout)
-                else:
-                    response = self.session.delete(url, headers=headers, timeout=self.timeout)
+                response = self.session.delete(url, headers=headers, data=body if body else None, timeout=self.timeout)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -193,6 +187,12 @@ class DeltaExchangeClient:
                     return {'success': False, 'status': status, 'error': error_data}
                 except Exception:
                     text = e.response.text
+                    if os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on') and not suppress_log:
+                        try:
+                            if os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on'):
+                                self.logger.error(f"[cancel] raw_response status={status} text={text[:400]}")
+                        except Exception:
+                            pass
                     if not suppress_log:
                         self.logger.error(f"Response content: {text}")
                     return {'success': False, 'status': status, 'error': text}
@@ -411,49 +411,58 @@ class DeltaExchangeClient:
         return self._make_request('POST', '/v2/orders', data=data)
     
     def cancel_order(self, order_id: int, *, product_id: Optional[int] = None, product_symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Cancel a single order using the observed reliable batch endpoint.
+
+        Strategy:
+        1. Use DELETE /v2/orders/batch with {'orders':[{'id': id}], product_symbol|product_id}
+        2. If no product context supplied, still attempt batch with only the id list.
+        3. OPTIONAL one-shot fallback: path DELETE /v2/orders/{id} (only if batch fails) for forward compatibility.
+
+        Logging: Guarded by DELTA_DEBUG_CANCEL to avoid noisy production logs.
         """
-        Cancel an order
-        
-        Args:
-            order_id: Order ID to cancel
-            product_id: Optional product id (used for batch fallback)
-            product_symbol: Optional product symbol (used for batch fallback)
-            
-        Returns:
-            Cancellation response
-        """
-        # Prefer batch cancel when we know product context (most reliable)
+        debug_cancel = os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on')
+
+        def dlog(msg: str):
+            if debug_cancel:
+                try:
+                    self.logger.info(f"[cancel] {msg}")
+                except Exception:
+                    pass
+
+        masked_key = (self.api_key[:4] + '***' + self.api_key[-4:]) if (debug_cancel and self.api_key) else ''
+        if debug_cancel:
+            dlog(f"start order_id={order_id} product_id={product_id} product_symbol={product_symbol} base_url={self.base_url} api_key={masked_key}")
+
+        # Primary batch attempt with context if provided
+        payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
+        if product_id:
+            payload['product_id'] = product_id
+        elif product_symbol:
+            payload['product_symbol'] = product_symbol
+        batch_resp = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
+        if debug_cancel:
+            dlog(f"batch context={'yes' if (product_id or product_symbol) else 'no'} success={getattr(batch_resp, 'get', lambda k: None)('success') if isinstance(batch_resp, dict) else None} status={batch_resp.get('status') if isinstance(batch_resp, dict) else None}")
+        if isinstance(batch_resp, dict) and batch_resp.get('success'):
+            batch_resp['note'] = 'cancel via batch'
+            return batch_resp
+
+        # If first attempt had context, try once more without context (some variants accept bare list)
         if product_id or product_symbol:
-            payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
-            if product_id:
-                payload['product_id'] = product_id
-            elif product_symbol:
-                payload['product_symbol'] = product_symbol
-            alt_b = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
-            if isinstance(alt_b, dict) and alt_b.get('success'):
-                alt_b['note'] = 'cancel via batch'
-                return alt_b
-            # If batch failed, try path form next
+            bare_resp = self._make_request('DELETE', '/v2/orders/batch', data={'orders': [{'id': order_id}]}, suppress_log=True)
+            if debug_cancel:
+                dlog(f"batch bare success={bare_resp.get('success') if isinstance(bare_resp, dict) else None} status={bare_resp.get('status') if isinstance(bare_resp, dict) else None}")
+            if isinstance(bare_resp, dict) and bare_resp.get('success'):
+                bare_resp['note'] = 'cancel via batch bare'
+                return bare_resp
+        else:
+            # Already tried bare (since no context); fall through
+            pass
 
-        # Path parameter form (as per docs)
-        result = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
-        if isinstance(result, dict) and result.get('success'):
-            return result
-
-        status = None
-        err_txt = ''
-        if isinstance(result, dict):
-            status = result.get('status')
-            err_txt = str(result.get('error'))
-
-        # Final fallback: query param form DELETE /v2/orders?id=...
-        qp = {'id': order_id}
-        alt_q = self._make_request('DELETE', '/v2/orders', params=qp, suppress_log=True)
-        if isinstance(alt_q, dict) and alt_q.get('success'):
-            alt_q['note'] = 'cancel via query id'
-            return alt_q
-
-        return result
+        # Optional: single path fallback
+        path_resp = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
+        if debug_cancel:
+            dlog(f"path-fallback success={path_resp.get('success') if isinstance(path_resp, dict) else None} status={path_resp.get('status') if isinstance(path_resp, dict) else None}")
+        return path_resp
     
     def cancel_all_orders(self, product_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """

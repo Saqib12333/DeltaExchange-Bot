@@ -22,10 +22,17 @@ class DeltaWSClient:
     Thread-safe, reconnecting, and stateful. Intended for use as a singleton in Streamlit via @st.cache_resource.
     """
 
-    def __init__(self, use_testnet: bool = False):
-        self.ws_url = (
-            "wss://socket-ind.testnet.deltaex.org" if use_testnet else "wss://socket.india.delta.exchange"
-        )
+    def __init__(self):
+        # Prefer explicit env override, else infer from BASE_URL (prod vs testnet)
+        base_env = os.getenv("DELTA_BASE_URL", "").lower()
+        explicit_ws = os.getenv("DELTA_WS_URL")
+        if explicit_ws:
+            self.ws_url = explicit_ws
+        else:
+            if "testnet" in base_env:
+                self.ws_url = "wss://socket-ind.testnet.deltaex.org"
+            else:
+                self.ws_url = "wss://socket.india.delta.exchange"
         self.ws = None
         self._thread = None
 
@@ -89,14 +96,17 @@ class DeltaWSClient:
 
     # Subscriptions
     def subscribe_mark(self, symbols: List[str]):
-        payload = {
-            "type": "subscribe",
-            "payload": {
-                "channels": [
-                    {"name": "mark_price", "symbols": [f"MARK:{s}" for s in symbols]}
-                ]
-            },
-        }
+        # Subscribe to both mark_price and ticker as a fallback in case one channel is unavailable
+        channels = [
+            {"name": "mark_price", "symbols": [f"MARK:{s}" for s in symbols]},
+            {"name": "ticker", "symbols": symbols},
+        ]
+        payload = {"type": "subscribe", "payload": {"channels": channels}}
+        if os.getenv("DELTA_WS_DEBUG", "false").lower() in {"1", "true", "yes"}:
+            try:
+                self.logger.info(f"WS send subscribe payload={payload}")
+            except Exception:
+                pass
         self._send_or_queue(payload)
 
     def subscribe_private_channels(self):
@@ -111,6 +121,11 @@ class DeltaWSClient:
             },
         }
         self._send_or_queue(subs)
+
+    def enable_heartbeat(self):
+        """Ask server to send heartbeat messages periodically."""
+        hb = {"type": "enable_heartbeat"}
+        self._send_or_queue(hb, require_auth=False)
 
     # Safe getters
     def get_latest_mark(self, symbol: str) -> Optional[float]:
@@ -154,6 +169,12 @@ class DeltaWSClient:
             except Exception as e:
                 self.logger.error(f"Failed to send auth: {e}")
 
+        # Enable heartbeat to detect connection drops reliably
+        try:
+            self.enable_heartbeat()
+        except Exception:
+            pass
+
         # Flush any queued messages (e.g., public subscriptions)
         self._flush_outbox(ws)
 
@@ -176,6 +197,13 @@ class DeltaWSClient:
             return
 
         mtype = data.get("type")
+
+        # Optional raw debug
+        if os.getenv("DELTA_WS_DEBUG", "false").lower() in {"1", "true", "yes"}:
+            try:
+                self.logger.info(f"WS recv type={mtype} keys={list(data.keys())[:6]} raw={str(data)[:240]}")
+            except Exception:
+                pass
 
         # Auth success
         if mtype == "success" and data.get("message") == "Authenticated":
@@ -203,14 +231,33 @@ class DeltaWSClient:
                         self._latest_mark[core] = price_f
             return
 
+        # Some deployments may use ticker channel name variations; capture them if present
+        if mtype in {"ticker", "v2/ticker"}:
+            # Attempt to normalise to mark price if mark field provided
+            try:
+                symbol = data.get("symbol") or data.get("product_symbol")
+                mark_price = data.get("mark_price") or data.get("mark")
+                if symbol and mark_price is not None:
+                    core = str(symbol).replace("MARK:", "")
+                    price_f = None
+                    try:
+                        price_f = float(mark_price)
+                    except Exception:
+                        pass
+                    if price_f is not None:
+                        with self._lock:
+                            self._latest_mark[core] = price_f
+            except Exception:
+                pass
+            return
+
         # Private: positions updates
         if mtype == "positions":
-            # Data shape may vary; handle dict or list forms
-            payload = data
-            # Try to normalize to list of position dicts
+            # Data shape may vary; normalize to list of position dicts
+            payload = data.get("result") or data.get("positions") or data.get("data") or data
             items: List[Dict[str, Any]]
-            if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], list):
-                items = payload["result"]
+            if isinstance(payload, list):
+                items = payload
             elif isinstance(payload, dict):
                 items = [payload]
             else:
@@ -225,10 +272,10 @@ class DeltaWSClient:
 
         # Private: orders updates
         if mtype == "orders":
-            payload = data
+            payload = data.get("result") or data.get("orders") or data.get("data") or data
             items2: List[Dict[str, Any]]
-            if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], list):
-                items2 = payload["result"]
+            if isinstance(payload, list):
+                items2 = payload
             elif isinstance(payload, dict):
                 items2 = [payload]
             else:
