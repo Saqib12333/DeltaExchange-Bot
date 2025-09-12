@@ -7,8 +7,6 @@
 
 A powerful cryptocurrency trading automation system for Delta Exchange India, featuring a flicker-free FastAPI + HTMX live dashboard and a planned automated strategy engine.
 
-![Dashboard Preview](https://via.placeholder.com/800x400/1f77b4/ffffff?text=Delta+Exchange+Dashboard)
-
 ## ✨ Features
 
 ### 📊 Real-Time Portfolio Dashboard — FULLY OPERATIONAL
