@@ -40,9 +40,13 @@ Agent-focused guide for the Delta Exchange Bot (FastAPI + HTMX + WebSockets trad
 - Detect HTMX via `request.headers.get('hx-request') == 'true'`; return partial instead of redirect.
 
 ## Order Cancel Workflow (Current)
-1. HTMX button posts `{order_id}` to `/orders/cancel`.
-2. Endpoint: optimistic removal from snapshot → REST cancel → REST refresh orders → broadcast updated partial.
-3. Other clients update via broadcast; initiating client swaps partial directly.
+1. HTMX (or fetch fallback) posts `{order_id}` to `/orders/cancel`.
+2. Endpoint: optimistic removal from snapshot then calls REST client `cancel_order`.
+3. REST client uses canonical batch endpoint: `DELETE /v2/orders/batch` with payload `{orders:[{id}], product_symbol}` (or `product_id`).
+4. If batch fails (rare) a single path fallback `DELETE /v2/orders/{id}` is attempted (observed to 404 on this deployment but retained for forward compatibility).
+5. Orders list re-fetched; broadcast updates others; initiating client swaps partial and now shows a toast “Order cancelled”.
+
+Note: Direct `DELETE /v2/orders/{id}` returned 404 despite valid IDs in this environment; batch endpoint is therefore treated as authoritative here. Update docs if upstream behavior changes.
 
 ## Safe Change Guidelines
 - Do NOT move domain logic into templates; keep them render‑idempotent and cheap.

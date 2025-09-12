@@ -189,7 +189,8 @@ class DeltaExchangeClient:
                     text = e.response.text
                     if os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on') and not suppress_log:
                         try:
-                            self.logger.error(f"[cancel-debug] raw_response status={status} text={text[:400]}")
+                            if os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on'):
+                                self.logger.error(f"[cancel] raw_response status={status} text={text[:400]}")
                         except Exception:
                             pass
                     if not suppress_log:
@@ -410,51 +411,57 @@ class DeltaExchangeClient:
         return self._make_request('POST', '/v2/orders', data=data)
     
     def cancel_order(self, order_id: int, *, product_id: Optional[int] = None, product_symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Minimal 3-step cancel logic (batch -> path -> query) restored from working Streamlit version."""
-        debug_cancel = os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on')
-        attempts: List[Dict[str, Any]] = []
+        """Cancel a single order using the observed reliable batch endpoint.
 
-        def _log(label: str, resp: Dict[str, Any]):
+        Strategy:
+        1. Use DELETE /v2/orders/batch with {'orders':[{'id': id}], product_symbol|product_id}
+        2. If no product context supplied, still attempt batch with only the id list.
+        3. OPTIONAL one-shot fallback: path DELETE /v2/orders/{id} (only if batch fails) for forward compatibility.
+
+        Logging: Guarded by DELTA_DEBUG_CANCEL to avoid noisy production logs.
+        """
+        debug_cancel = os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on')
+
+        def dlog(msg: str):
             if debug_cancel:
                 try:
-                    self.logger.info(f"[cancel-debug] attempt={label} success={resp.get('success')} status={resp.get('status')} error={resp.get('error')}")
+                    self.logger.info(f"[cancel] {msg}")
                 except Exception:
                     pass
-            attempts.append({'label': label, 'resp': resp})
 
-        # 1. Batch cancel (preferred when product context known)
+        masked_key = (self.api_key[:4] + '***' + self.api_key[-4:]) if (debug_cancel and self.api_key) else ''
+        if debug_cancel:
+            dlog(f"start order_id={order_id} product_id={product_id} product_symbol={product_symbol} base_url={self.base_url} api_key={masked_key}")
+
+        # Primary batch attempt with context if provided
+        payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
+        if product_id:
+            payload['product_id'] = product_id
+        elif product_symbol:
+            payload['product_symbol'] = product_symbol
+        batch_resp = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
+        if debug_cancel:
+            dlog(f"batch context={'yes' if (product_id or product_symbol) else 'no'} success={getattr(batch_resp, 'get', lambda k: None)('success') if isinstance(batch_resp, dict) else None} status={batch_resp.get('status') if isinstance(batch_resp, dict) else None}")
+        if isinstance(batch_resp, dict) and batch_resp.get('success'):
+            batch_resp['note'] = 'cancel via batch'
+            return batch_resp
+
+        # If first attempt had context, try once more without context (some variants accept bare list)
         if product_id or product_symbol:
-            payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
-            if product_id:
-                payload['product_id'] = product_id
-            elif product_symbol:
-                payload['product_symbol'] = product_symbol
-            batch_resp = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
-            _log('batch', batch_resp)
-            if isinstance(batch_resp, dict) and batch_resp.get('success'):
-                batch_resp['note'] = 'cancel via batch'
-                return batch_resp
+            bare_resp = self._make_request('DELETE', '/v2/orders/batch', data={'orders': [{'id': order_id}]}, suppress_log=True)
+            if debug_cancel:
+                dlog(f"batch bare success={bare_resp.get('success') if isinstance(bare_resp, dict) else None} status={bare_resp.get('status') if isinstance(bare_resp, dict) else None}")
+            if isinstance(bare_resp, dict) and bare_resp.get('success'):
+                bare_resp['note'] = 'cancel via batch bare'
+                return bare_resp
+        else:
+            # Already tried bare (since no context); fall through
+            pass
 
-        # 2. Direct path form
+        # Optional: single path fallback
         path_resp = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
-        _log('path', path_resp)
-        if isinstance(path_resp, dict) and path_resp.get('success'):
-            return path_resp
-
-        # 3. Query param fallback
-        qp_resp = self._make_request('DELETE', '/v2/orders', params={'id': order_id}, suppress_log=True)
-        _log('query', qp_resp)
-        if isinstance(qp_resp, dict) and qp_resp.get('success'):
-            qp_resp['note'] = 'cancel via query id'
-            return qp_resp
-
-        if debug_cancel and isinstance(path_resp, dict):
-            return {
-                'success': False,
-                'status': path_resp.get('status'),
-                'error': path_resp.get('error'),
-                'attempts': attempts
-            }
+        if debug_cancel:
+            dlog(f"path-fallback success={path_resp.get('success') if isinstance(path_resp, dict) else None} status={path_resp.get('status') if isinstance(path_resp, dict) else None}")
         return path_resp
     
     def cancel_all_orders(self, product_ids: Optional[List[int]] = None) -> Dict[str, Any]:

@@ -3,7 +3,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-HTMX-green.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-3.1.0-informational.svg)](#)
+[![Version](https://img.shields.io/badge/version-4.3.0-informational.svg)](#)
 
 A powerful cryptocurrency trading automation system for Delta Exchange India, featuring a flicker-free FastAPI + HTMX live dashboard and a planned automated strategy engine.
 
@@ -15,7 +15,7 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 - **Live Account Balance** - Monitor your wallet balances across all cryptocurrencies
 - **Position Tracking** - View open positions with accurate P&L calculations using real mark prices
 - **Order Management** - Track all open orders with properly formatted status information
- - **Order Actions** - Place maker-only (post-only) limit orders and cancel specific open orders
+ - **Order Actions** - Place maker-only (post-only) limit orders and cancel specific open orders (cancel uses canonical batch API endpoint with symbol context + toast confirmation)
 - **BTCUSD Mark Price** - Real-time accurate price monitoring with status indicators
 - **1s Auto-Refresh** - Fixed 1-second refresh cadence (no manual controls)
 - **WebSocket Mark Price** - Live WS feed for BTCUSD with REST candles as fallback
@@ -43,6 +43,7 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 - **UI Simplification**: Removed manual refresh controls and redundant tables; card-first UI.
 - **Auto-Refresh**: Fixed 1-second auto-refresh with countdown placeholder and safe rerun.
 - **Rate Limiting & Timeouts**: Added decorators and consistent 30s request timeouts.
+- **Canonical Cancel Path**: Standardized single-order cancel to use `DELETE /v2/orders/batch` (`{orders:[{id}], product_symbol}`) after `/v2/orders/{id}` returned 404s in this deployment. Path retained only as guarded fallback. UI now shows a lightweight “Order cancelled” toast.
 
 ## 🚀 Quick Start
 

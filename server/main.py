@@ -359,11 +359,19 @@ async def cancel_order(
     order_obj = service.snapshot.orders.get(order_id)
     if isinstance(order_obj, dict):
         product_id = order_obj.get("product_id") or (order_obj.get("product") or {}).get("id") if isinstance(order_obj.get("product"), dict) else None
+        product_symbol = order_obj.get("product_symbol") or order_obj.get("symbol")
+    else:
+        product_symbol = None
+
+    try:
+        logger.info(f"/orders/cancel resolve order_id={order_id} product_id={product_id} product_symbol={product_symbol}")
+    except Exception:
+        pass
 
     cancel_resp: Dict[str, Any] = {}
     cancel_success = False
     try:
-        cancel_resp = service.rest_client.cancel_order(order_id=int(order_id), product_id=product_id)
+        cancel_resp = service.rest_client.cancel_order(order_id=int(order_id), product_id=product_id, product_symbol=product_symbol)
         cancel_success = bool(cancel_resp.get("success"))
     except Exception as e:
         logger.warning("Cancel order exception order_id=%s err=%s", order_id, e)

@@ -43,6 +43,19 @@
 
 // Debug probe: log htmx presence & attach listener to cancel buttons to confirm clicks reach JS layer
 window.addEventListener('DOMContentLoaded', () => {
+  function showToast(message, type='info', timeout=2200){
+    const container = document.getElementById('toast-container');
+    if(!container) return;
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.textContent = message;
+    container.appendChild(el);
+    requestAnimationFrame(()=>{ el.classList.add('visible'); });
+    setTimeout(()=>{
+      el.classList.remove('visible');
+      setTimeout(()=> el.remove(), 400);
+    }, timeout);
+  }
   console.log('[debug] htmx present:', !!window.htmx, 'ws ext:', !!(window.htmx && window.htmx.extensions && window.htmx.extensions.ws));
   document.body.addEventListener('click', (e) => {
     if(e.target && e.target.classList && e.target.classList.contains('order-cancel-btn')){
@@ -67,11 +80,14 @@ window.addEventListener('DOMContentLoaded', () => {
         const html = await resp.text();
         const ordersEl = document.getElementById('orders');
         if(ordersEl){ ordersEl.innerHTML = html; }
+        showToast('Order cancelled', 'success');
       } else {
         console.warn('Cancel fetch failed status', resp.status);
+        showToast('Cancel failed', 'error');
       }
     } catch(err){
       console.warn('Cancel fetch exception', err);
+      showToast('Cancel error', 'error');
     }
   });
 });
