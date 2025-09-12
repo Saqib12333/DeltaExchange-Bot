@@ -59,6 +59,17 @@ footer { padding: 12px 16px; color: #64748b; }
 .balances-mini th, .balances-mini td { padding:2px 6px; border-bottom:1px solid #262b3b; }
 @media (min-width:900px){ .stat-card--balances { grid-column: span 3; } }
 
+/* Margin percent coloring */
+.m-high { color:#86efac; font-weight:600; }
+.m-mid { color:#facc15; font-weight:600; }
+.m-low { color:#f87171; font-weight:600; }
+
+/* Enlarge balances numeric font inside stat card */
+.stat-card--balances .balances-mini td { font-size:13px; }
+
+/* Locked symbol styling */
+.locked-symbol { display:inline-block; padding:8px 10px; background:#0f1117; border:1px solid #262b3b; border-radius:6px; font-weight:600; letter-spacing:.5px; }
+
 /* Branding icon */
 .brand-icon { width:18px; height:18px; vertical-align:middle; fill:#64748b; opacity:0.8; }
 .brand-icon:hover { opacity:1; }

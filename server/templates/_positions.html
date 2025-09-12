@@ -1,25 +1,44 @@
 {% if positions %}
   <table>
-    <thead><tr><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>PNL</th></tr></thead>
+    <thead><tr><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>Liq</th><th>PNL</th><th>PNL%</th></tr></thead>
     <tbody>
       {% for sym, pos in positions.items() %}
-  {# Safely coerce numeric fields that may arrive as strings #}
+  {# Extract & normalize fields #}
   {% set _entry_raw = pos.entry_price if pos.entry_price is not none else pos.get('entry_price') %}
   {% set _size_raw = pos.size if pos.size is not none else pos.get('size') %}
   {% set _mark_raw = marks.get(sym) %}
+  {% set _liq_raw = pos.liquidation_price if pos.liquidation_price is not none else pos.get('liquidation_price') %}
+  {% set _api_pnl_raw = pos.unrealized_pnl if pos.unrealized_pnl is not none else pos.get('unrealized_pnl') %}
+  {# Margin fields vary; avoid attribute access that can raise. #}
+  {% set _margin_used_raw = pos.get('margin_used') or pos.get('initial_margin') or pos.get('position_margin') or pos.get('margin') %}
   {% set entry = (_entry_raw|float) if _entry_raw is not none else None %}
   {% set raw_size = (_size_raw|float) if _size_raw is not none else None %}
   {% set mark = (_mark_raw|float) if _mark_raw is not none else None %}
-      {# Infer side from explicit direction, otherwise from size sign #}
-      {% set side = (pos.direction or pos.get('direction')) if (pos.direction or pos.get('direction')) else ('sell' if raw_size is not none and raw_size < 0 else 'buy') %}
-      {# PnL formula: (mark - entry) * size works for both long(+) and short(-) #}
-  {% set pnl = (mark - entry) * raw_size if (mark is not none and entry is not none and raw_size is not none) else None %}
+  {% set liq = (_liq_raw|float) if _liq_raw is not none else None %}
+  {% set api_pnl = (_api_pnl_raw|float) if _api_pnl_raw is not none else None %}
+  {% set side = (pos.direction or pos.get('direction')) if (pos.direction or pos.get('direction')) else ('sell' if raw_size is not none and raw_size < 0 else 'buy') %}
+  {# Recalculate PnL each render using current mark when possible #}
+  {% set contract_value = 0.001 %}
+  {% set calc_pnl = (mark - entry) * raw_size * contract_value if (mark is not none and entry is not none and raw_size is not none) else None %}
+  {% set pnl = calc_pnl if calc_pnl is not none else api_pnl %}
+  {# Derive margin used; fallback to notional/entry*abs(size)/leverage keys if provided #}
+  {% set margin_used = (_margin_used_raw is not none and _margin_used_raw != '' and (_margin_used_raw|float)) or None %}
+  {% if margin_used is none and entry is not none and raw_size is not none %}
+  {% set lev_raw = pos.get('leverage') %}
+    {% set lev = (lev_raw|float) if lev_raw is not none else None %}
+    {% if lev is not none and lev > 0 %}
+  {% set margin_used = (entry * (raw_size|abs) * contract_value) / lev %}
+    {% endif %}
+  {% endif %}
+  {% set pnl_pct = (pnl / margin_used * 100) if (pnl is not none and margin_used is not none and margin_used != 0) else None %}
       <tr>
         <td>{{ side }}</td>
         <td>{{ '%.0f'|format(raw_size) if raw_size is not none else '-' }}</td>
         <td>{{ entry is not none and ('%.2f'|format(entry)) or '-' }}</td>
         <td>{{ mark is not none and ('%.2f'|format(mark)) or '-' }}</td>
-        <td class="{{ 'pos' if pnl is not none and pnl>=0 else 'neg' }}">{{ '%.2f'|format(pnl) if pnl is not none else '-' }}</td>
+        <td>{{ liq is not none and ('%.2f'|format(liq)) or '-' }}</td>
+        <td class="{{ 'pos' if pnl is not none and pnl>=0 else 'neg' }}">{{ pnl is not none and ('$' + ('%.2f'|format(pnl))) or '-' }}</td>
+        <td class="{{ 'pos' if pnl_pct is not none and pnl_pct>=0 else 'neg' }}">{{ pnl_pct is not none and ('%.2f'|format(pnl_pct)) or '-' }}</td>
       </tr>
       {% endfor %}
     </tbody>

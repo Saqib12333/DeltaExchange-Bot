@@ -23,7 +23,10 @@
 <section class="card order-form">
   <h2>Place Orders</h2>
   <form method="post" action="/orders/place" class="form-row">
-    <label>Symbol <input type="text" name="product_symbol" value="BTCUSD" required></label>
+    <label>Symbol
+      <span class="locked-symbol">BTCUSD</span>
+      <input type="hidden" name="product_symbol" value="BTCUSD">
+    </label>
     <label>Side
       <select name="side">
         <option value="buy">Buy</option>

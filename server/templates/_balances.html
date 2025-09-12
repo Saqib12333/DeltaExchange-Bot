@@ -1,11 +1,18 @@
 {% if balances %}
   <table>
-    <thead><tr><th>Available</th><th>Total</th></tr></thead>
+    <thead><tr><th>Available</th><th>Blocked</th><th>Total</th><th>Available Margin %</th></tr></thead>
     <tbody>
       {% for asset, row in balances.items() %}
+      {% set avail = (row.available_balance|float) %}
+      {% set total = (row.total_balance|float) %}
+      {% set blocked = (total - avail) %}
+      {% set pct = (avail / total * 100) if total and total != 0 else None %}
+      {% set pct_cls = 'm-high' if pct is not none and pct >= 70 else ('m-mid' if pct is not none and pct >= 30 else 'm-low') %}
       <tr>
-        <td>{{ '%.2f'|format(row.available_balance|float) }}</td>
-        <td>{{ '%.2f'|format(row.total_balance|float) }}</td>
+        <td>${{ '%.2f'|format(avail) }}</td>
+        <td>${{ '%.2f'|format(blocked) }}</td>
+        <td>${{ '%.2f'|format(total) }}</td>
+        <td class="{{ pct_cls }}">{{ pct is not none and ('%.1f'|format(pct)) or '-' }}</td>
       </tr>
       {% endfor %}
     </tbody>
