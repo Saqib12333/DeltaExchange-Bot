@@ -1,0 +1,27 @@
+<div class="stats-cards" id="stats-cards-inner">
+  <div class="stat-card">
+    <div class="stat-card__label">MARK (BTCUSD)</div>
+    <div class="stat-card__value" id="stat-mark">{% if mark %}{{ '%.2f'|format(mark) }}{% else %}--{% endif %}</div>
+    <div class="stat-card__delta stat-card__delta--neutral">live</div>
+  </div>
+  <div class="stat-card stat-card--balances">
+    <div class="stat-card__label">BALANCES</div>
+    <div class="balances-mini-wrapper">
+      {% if balances %}
+      <table class="balances-mini">
+        <thead><tr><th>Available</th><th>Total</th></tr></thead>
+        <tbody>
+        {% for asset, row in balances.items() %}
+          <tr>
+            <td>{{ '%.2f'|format(row.available_balance|float) }}</td>
+            <td>{{ '%.2f'|format(row.total_balance|float) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="placeholder">No data</div>
+      {% endif %}
+    </div>
+  </div>
+</div>

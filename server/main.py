@@ -67,6 +67,7 @@ class ConnectionManager:
         self._balances: Set[WebSocket] = set()
         self._positions: Set[WebSocket] = set()
         self._orders: Set[WebSocket] = set()
+        self._stats: Set[WebSocket] = set()
 
     def get_pool(self, topic: str) -> Set[WebSocket]:
         return {
@@ -74,6 +75,7 @@ class ConnectionManager:
             "balances": self._balances,
             "positions": self._positions,
             "orders": self._orders,
+            "stats": self._stats,
         }[topic]
 
     async def connect(self, ws: WebSocket, topic: str):
@@ -310,10 +312,15 @@ class DataService:
         html_bal = templates.get_template("_balances.html").render(balances=self.snapshot.balances)
         html_pos = templates.get_template("_positions.html").render(positions=self.snapshot.positions, marks=self.snapshot.marks)
         html_ord = templates.get_template("_orders.html").render(orders=self.snapshot.orders)
+        html_stats_inner = templates.get_template("_stats.html").render(
+            mark=self.snapshot.marks.get("BTCUSD"),
+            balances=self.snapshot.balances,
+        )
         await manager.broadcast("mark", html_mark)
         await manager.broadcast("balances", html_bal)
         await manager.broadcast("positions", html_pos)
         await manager.broadcast("orders", html_ord)
+        await manager.broadcast("stats", html_stats_inner)
 
 
 data_service = DataService()
@@ -500,4 +507,14 @@ async def ws_orders(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws, "orders")
+
+
+@app.websocket("/ws/stats")
+async def ws_stats(ws: WebSocket):
+    await manager.connect(ws, "stats")
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(ws, "stats")
 

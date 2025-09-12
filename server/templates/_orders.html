@@ -1,15 +1,14 @@
 {% if orders %}
   <table>
-    <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Size</th><th>Price</th><th>Status</th><th>Action</th></tr></thead>
+    <thead><tr><th>Side</th><th>Size</th><th>Price</th><th>Action</th></tr></thead>
     <tbody>
       {% for oid, od in orders.items() %}
+      {% set _size = od.size or od.get('size') %}
+      {% set _price = od.limit_price or od.get('limit_price') or od.price or od.get('price') or od.get('average_fill_price') %}
       <tr>
-        <td>{{ oid }}</td>
-        <td>{{ od.product_symbol or od.get('product_symbol') }}</td>
         <td>{{ od.side or od.get('side') }}</td>
-        <td>{{ od.size or od.get('size') }}</td>
-  <td>{{ od.limit_price or od.get('limit_price') or od.price or od.get('price') or od.get('average_fill_price') }}</td>
-        <td>{{ od.state or od.get('state') }}</td>
+        <td>{{ _size is not none and ('%.0f'|format(_size|float)) or '-' }}</td>
+        <td>{{ _price is not none and ('%.2f'|format(_price|float)) or '-' }}</td>
         <td>
           <form method="post" action="/orders/cancel"
                 hx-post="/orders/cancel"

@@ -1,6 +1,6 @@
 {% if positions %}
   <table>
-    <thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>PNL</th></tr></thead>
+    <thead><tr><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>PNL</th></tr></thead>
     <tbody>
       {% for sym, pos in positions.items() %}
   {# Safely coerce numeric fields that may arrive as strings #}
@@ -15,11 +15,10 @@
       {# PnL formula: (mark - entry) * size works for both long(+) and short(-) #}
   {% set pnl = (mark - entry) * raw_size if (mark is not none and entry is not none and raw_size is not none) else None %}
       <tr>
-        <td>{{ sym }}</td>
         <td>{{ side }}</td>
-        <td>{{ '%.6f'|format(raw_size) if raw_size is not none else '-' }}</td>
-        <td>{{ entry }}</td>
-        <td>{{ mark or '-' }}</td>
+        <td>{{ '%.0f'|format(raw_size) if raw_size is not none else '-' }}</td>
+        <td>{{ entry is not none and ('%.2f'|format(entry)) or '-' }}</td>
+        <td>{{ mark is not none and ('%.2f'|format(mark)) or '-' }}</td>
         <td class="{{ 'pos' if pnl is not none and pnl>=0 else 'neg' }}">{{ '%.2f'|format(pnl) if pnl is not none else '-' }}</td>
       </tr>
       {% endfor %}
