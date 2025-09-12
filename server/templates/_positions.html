@@ -4,11 +4,11 @@
     <tbody>
       {% for sym, pos in positions.items() %}
   {# Extract & normalize fields #}
-  {% set _entry_raw = pos.entry_price if pos.entry_price is not none else pos.get('entry_price') %}
-  {% set _size_raw = pos.size if pos.size is not none else pos.get('size') %}
+  {% set _entry_raw = pos.get('entry_price') %}
+  {% set _size_raw = pos.get('size') %}
   {% set _mark_raw = marks.get(sym) %}
-  {% set _liq_raw = pos.liquidation_price if pos.liquidation_price is not none else pos.get('liquidation_price') %}
-  {% set _api_pnl_raw = pos.unrealized_pnl if pos.unrealized_pnl is not none else pos.get('unrealized_pnl') %}
+  {% set _liq_raw = pos.get('liquidation_price') %}
+  {% set _api_pnl_raw = pos.get('unrealized_pnl') %}
   {# Margin fields vary; avoid attribute access that can raise. #}
   {% set _margin_used_raw = pos.get('margin_used') or pos.get('initial_margin') or pos.get('position_margin') or pos.get('margin') %}
   {% set entry = (_entry_raw|float) if _entry_raw is not none else None %}
@@ -16,7 +16,7 @@
   {% set mark = (_mark_raw|float) if _mark_raw is not none else None %}
   {% set liq = (_liq_raw|float) if _liq_raw is not none else None %}
   {% set api_pnl = (_api_pnl_raw|float) if _api_pnl_raw is not none else None %}
-  {% set side = (pos.direction or pos.get('direction')) if (pos.direction or pos.get('direction')) else ('sell' if raw_size is not none and raw_size < 0 else 'buy') %}
+  {% set side = pos.get('direction') or ('sell' if raw_size is not none and raw_size < 0 else 'buy') %}
   {# Recalculate PnL each render using current mark when possible #}
   {% set contract_value = 0.001 %}
   {% set calc_pnl = (mark - entry) * raw_size * contract_value if (mark is not none and entry is not none and raw_size is not none) else None %}
