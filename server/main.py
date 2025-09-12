@@ -28,6 +28,21 @@ BASE_URL = os.getenv("DELTA_BASE_URL", "https://api.india.delta.exchange")
 app = FastAPI(title="Delta Exchange Bot - FastAPI")
 logger = logging.getLogger("delta.app")
 logging.basicConfig(level=logging.INFO)
+# Reduce uvicorn access log noise if action-only logging desired
+if os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in ("1","true","yes","on"):
+    try:
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(logging.ERROR)
+        logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+        # Remove access logger handlers to suppress connection accepted lines completely
+        acc = logging.getLogger("uvicorn.access")
+        for h in list(acc.handlers):
+            acc.removeHandler(h)
+        wslog = logging.getLogger("uvicorn.protocols.websockets.websockets_impl")
+        for h in list(wslog.handlers):
+            wslog.removeHandler(h)
+    except Exception:
+        pass
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -144,11 +159,13 @@ class DataService:
         first_broadcast_done = False
         tick = 0
 
-        logger.info("_real_loop entered: starting main data aggregation loop")
+        action_only = os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in ("1","true","yes","on")
+        if not action_only:
+            logger.info("_real_loop entered: starting main data aggregation loop")
 
         while not self._stop.is_set():
             try:
-                if prev is None:
+                if prev is None and not action_only:
                     logger.info("Loop first iteration starting (tick=%s)", tick)
 
                 # Mark price
@@ -209,7 +226,8 @@ class DataService:
                                     for row in result
                                     if (row.get("asset_symbol") or row.get("symbol"))
                                 }
-                                logger.info("Pulled balances count=%s", len(balances))
+                                if not action_only:
+                                    logger.info("Pulled balances count=%s", len(balances))
                     except Exception:
                         pass
 
@@ -223,7 +241,8 @@ class DataService:
                 if prev is None:
                     await self._broadcast_all()
                     first_broadcast_done = True
-                    logger.info("Initial forced broadcast executed (may be empty) tick=%s", tick)
+                    if not action_only:
+                        logger.info("Initial forced broadcast executed (may be empty) tick=%s", tick)
 
                 if snap != prev:
                     async with self._lock:
@@ -235,16 +254,33 @@ class DataService:
                     prev = snap
                     await self._broadcast_all()
                     first_broadcast_done = True
-                    logger.info(
-                        "Broadcast v%s tick=%s marks=%d positions=%d orders=%d balances=%d ws_mark=%s",
-                        self.snapshot.version,
-                        tick,
-                        len(self.snapshot.marks),
-                        len(self.snapshot.positions),
-                        len(self.snapshot.orders),
-                        len(self.snapshot.balances),
-                        ws_mark_seen,
-                    )
+                    # Action-only concise diff logging
+                    if action_only:
+                        try:
+                            prev_orders = set(prev.get("orders", {}).keys()) if prev else set()
+                            new_orders = set(self.snapshot.orders.keys())
+                            added = new_orders - prev_orders
+                            removed = prev_orders - new_orders
+                            if added or removed:
+                                logger.info("Orders changed: +%s -%s total=%s", ",".join(sorted(added)) or '-', ",".join(sorted(removed)) or '-', len(new_orders))
+                            # Positions: log changed symbols
+                            prev_pos_syms = set(prev.get("positions", {}).keys()) if prev else set()
+                            new_pos_syms = set(self.snapshot.positions.keys())
+                            if new_pos_syms != prev_pos_syms:
+                                logger.info("Positions changed: now=%s", ",".join(sorted(new_pos_syms)) or 'none')
+                        except Exception:
+                            pass
+                    else:
+                        logger.info(
+                            "Broadcast v%s tick=%s marks=%d positions=%d orders=%d balances=%d ws_mark=%s",
+                            self.snapshot.version,
+                            tick,
+                            len(self.snapshot.marks),
+                            len(self.snapshot.positions),
+                            len(self.snapshot.orders),
+                            len(self.snapshot.balances),
+                            ws_mark_seen,
+                        )
                 else:
                     if os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes") and not ws_mark_seen:
                         try:
@@ -255,7 +291,8 @@ class DataService:
                         try:
                             await self._broadcast_all()
                             first_broadcast_done = True
-                            logger.info("Forced initial broadcast with empty snapshot to populate UI placeholders tick=%s", tick)
+                            if not action_only:
+                                logger.info("Forced initial broadcast with empty snapshot to populate UI placeholders tick=%s", tick)
                         except Exception:
                             pass
                 tick += 1
@@ -327,7 +364,7 @@ async def place_order(
         pass
     if pid is None:
         return RedirectResponse("/", status_code=303)
-    service.rest_client.place_order(
+    place_resp = service.rest_client.place_order(
         product_id=int(pid),
         size=size,
         side=side,
@@ -336,6 +373,13 @@ async def place_order(
         time_in_force="gtc",
         post_only=True,
     )
+    try:
+        oid = None
+        if isinstance(place_resp, dict):
+            oid = place_resp.get("result", {}).get("id") if isinstance(place_resp.get("result"), dict) else place_resp.get("order_id") or place_resp.get("id")
+        logger.info("order.place symbol=%s side=%s size=%s limit=%s id=%s", product_symbol, side, size, limit_price, oid)
+    except Exception:
+        pass
     return RedirectResponse("/", status_code=303)
 
 
@@ -347,12 +391,7 @@ async def cancel_order(
 ):
     # Real mode only
     assert service.rest_client is not None
-    headers_snapshot = {}
-    try:
-        headers_snapshot = dict(request.headers)
-        logger.info("/orders/cancel headers=%s", headers_snapshot)
-    except Exception:
-        pass
+    # Removed verbose header logging (only useful for deep diagnostics)
 
     prior_ids = list(service.snapshot.orders.keys())
     product_id: Optional[int] = None
@@ -363,10 +402,7 @@ async def cancel_order(
     else:
         product_symbol = None
 
-    try:
-        logger.info(f"/orders/cancel resolve order_id={order_id} product_id={product_id} product_symbol={product_symbol}")
-    except Exception:
-        pass
+    logger.info("order.cancel requested id=%s symbol=%s pid=%s", order_id, product_symbol, product_id)
 
     cancel_resp: Dict[str, Any] = {}
     cancel_success = False

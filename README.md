@@ -212,6 +212,7 @@ ws = DeltaWSClient(use_testnet=True).connect()
 ws.subscribe_mark(["BTCUSD"])  # Client will send MARK:BTCUSD under the hood
 price = ws.get_latest_mark("BTCUSD")
 ws.close()
+```
 
 ## 🧪 End-to-end test (Playwright)
 
@@ -221,7 +222,6 @@ We provide a basic Playwright test that runs the server in mock mode and validat
 pip install -r requirements.txt
 python -m playwright install --with-deps  # one-time
 pytest -q tests/test_e2e_playwright.py
-```
 ```
 
 ## 🛡️ Security Best Practices
