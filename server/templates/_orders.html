@@ -11,18 +11,15 @@
   <td>{{ od.limit_price or od.get('limit_price') or od.price or od.get('price') or od.get('average_fill_price') }}</td>
         <td>{{ od.state or od.get('state') }}</td>
         <td>
-          <button 
-            hx-post="/orders/cancel"
-            data-hx-post="/orders/cancel"
-            hx-vals='{"order_id":"{{ oid }}"}'
-            data-hx-vals='{"order_id":"{{ oid }}"}'
-            hx-target="#orders"
-            data-hx-target="#orders"
-            hx-swap="innerHTML"
-            data-hx-swap="innerHTML"
-            hx-trigger="click"
-            class="order-cancel-btn"
-          >Cancel</button>
+          <form method="post" action="/orders/cancel"
+                hx-post="/orders/cancel"
+                hx-target="#orders"
+                hx-swap="innerHTML"
+                hx-trigger="submit"
+                class="inline-cancel-form">
+            <input type="hidden" name="order_id" value="{{ oid }}" />
+            <button type="submit" class="order-cancel-btn" name="cancel_btn" value="{{ oid }}">Cancel</button>
+          </form>
         </td>
       </tr>
       {% endfor %}

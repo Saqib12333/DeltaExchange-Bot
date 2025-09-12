@@ -16,3 +16,4 @@ __pycache__/
 *.cpython-313.pyc
 .playwright-mcp
 Streamlit Version/
+.github/

@@ -23,7 +23,16 @@ class DeltaWSClient:
     """
 
     def __init__(self):
-        self.ws_url = "wss://socket.india.delta.exchange"
+        # Prefer explicit env override, else infer from BASE_URL (prod vs testnet)
+        base_env = os.getenv("DELTA_BASE_URL", "").lower()
+        explicit_ws = os.getenv("DELTA_WS_URL")
+        if explicit_ws:
+            self.ws_url = explicit_ws
+        else:
+            if "testnet" in base_env:
+                self.ws_url = "wss://socket-ind.testnet.deltaex.org"
+            else:
+                self.ws_url = "wss://socket.india.delta.exchange"
         self.ws = None
         self._thread = None
 

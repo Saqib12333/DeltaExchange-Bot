@@ -347,24 +347,46 @@ async def cancel_order(
 ):
     # Real mode only
     assert service.rest_client is not None
+    headers_snapshot = {}
     try:
-        logger.info("/orders/cancel headers=%s", dict(request.headers))
+        headers_snapshot = dict(request.headers)
+        logger.info("/orders/cancel headers=%s", headers_snapshot)
     except Exception:
         pass
-    # Optimistic removal: drop from current snapshot immediately so HTMX swap hides it fast
+
+    prior_ids = list(service.snapshot.orders.keys())
+    product_id: Optional[int] = None
+    order_obj = service.snapshot.orders.get(order_id)
+    if isinstance(order_obj, dict):
+        product_id = order_obj.get("product_id") or (order_obj.get("product") or {}).get("id") if isinstance(order_obj.get("product"), dict) else None
+
+    cancel_resp: Dict[str, Any] = {}
+    cancel_success = False
     try:
-        async with service._lock:  # type: ignore[attr-defined]
-            if order_id in service.snapshot.orders:
+        cancel_resp = service.rest_client.cancel_order(order_id=int(order_id), product_id=product_id)
+        cancel_success = bool(cancel_resp.get("success"))
+    except Exception as e:
+        logger.warning("Cancel order exception order_id=%s err=%s", order_id, e)
+
+    # Only remove locally if API reported success
+    if cancel_success:
+        try:
+            async with service._lock:  # type: ignore[attr-defined]
                 service.snapshot.orders.pop(order_id, None)
                 service.snapshot.version += 1
-    except Exception:
-        pass
-    try:
-        service.rest_client.cancel_order(order_id=int(order_id))
-    except Exception:
-        logger.warning("Cancel order failed order_id=%s", order_id)
+        except Exception:
+            pass
+    else:
+        try:
+            logger.warning(
+                "Cancel order API reported failure order_id=%s resp=%s order_obj=%s prior_ids=%s", 
+                order_id, cancel_resp, order_obj, prior_ids
+            )
+        except Exception:
+            logger.warning("Cancel order API reported failure order_id=%s resp=%s (order_obj log failed)", order_id, cancel_resp)
 
-    # Refresh orders immediately via REST (fast path) so UI reflects cancel without waiting for WS
+    # Refresh from REST to ensure authoritative state
+    refreshed_ids: List[str] = []
     try:
         ord_resp = service.rest_client.get_orders()
         orders: Dict[str, Any] = {}
@@ -372,22 +394,25 @@ async def cancel_order(
             for o in (ord_resp.get("result") or []):
                 if o.get("id") is not None:
                     orders[str(o.get("id"))] = o
+            refreshed_ids = list(orders.keys())
         async with service._lock:  # type: ignore[attr-defined]
             service.snapshot.orders = orders
             service.snapshot.version += 1
     except Exception as e:
-        logger.error("Failed to refresh orders after cancel: %s", e)
+        logger.error("Failed to refresh orders after cancel order_id=%s err=%s", order_id, e)
 
-    # Render partial (orders may be empty)
+    removed = set(prior_ids) - set(refreshed_ids)
+    logger.info("Cancel result order_id=%s success=%s removed_now=%s remaining=%d", order_id, cancel_success, order_id in removed, len(refreshed_ids))
+
     html_ord = templates.get_template("_orders.html").render(orders=service.snapshot.orders)
-    # Broadcast so other connected clients update too
+    # Broadcast to others
     try:
         await manager.broadcast("orders", html_ord)
     except Exception:
         pass
 
-    if request.headers.get("hx-request") == "true":
-        from fastapi.responses import HTMLResponse
+    # Return partial for HX or fetch fallback
+    if request.headers.get("hx-request") == "true" or request.headers.get("x-fetch-cancel") == "1":
         return HTMLResponse(html_ord)
     return RedirectResponse("/", status_code=303)
 

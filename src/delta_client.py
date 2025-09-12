@@ -148,8 +148,8 @@ class DeltaExchangeClient:
 
         headers = {
             'Content-Type': 'application/json',
-            # Provide a stable UA to avoid occasional CDN 4xx blocks
-            'User-Agent': 'DeltaBot/3.0 maker-tester'
+            'Accept': 'application/json',
+            'User-Agent': 'DeltaBot/3.1 cancel-diagnostics'
         }
 
         # Only sign/authenticate non-public endpoints
@@ -163,17 +163,11 @@ class DeltaExchangeClient:
 
         try:
             if method == 'GET':
-                # Use the full URL with query string, no separate params
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
             elif method == 'POST':
-                # Send the exact JSON string we signed to avoid signature mismatch
                 response = self.session.post(url, headers=headers, data=body if body else None, timeout=self.timeout)
             elif method == 'DELETE':
-                # Send the exact JSON string we signed (if any)
-                if data is not None and body:
-                    response = self.session.delete(url, headers=headers, data=body, timeout=self.timeout)
-                else:
-                    response = self.session.delete(url, headers=headers, timeout=self.timeout)
+                response = self.session.delete(url, headers=headers, data=body if body else None, timeout=self.timeout)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -193,6 +187,11 @@ class DeltaExchangeClient:
                     return {'success': False, 'status': status, 'error': error_data}
                 except Exception:
                     text = e.response.text
+                    if os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on') and not suppress_log:
+                        try:
+                            self.logger.error(f"[cancel-debug] raw_response status={status} text={text[:400]}")
+                        except Exception:
+                            pass
                     if not suppress_log:
                         self.logger.error(f"Response content: {text}")
                     return {'success': False, 'status': status, 'error': text}
@@ -411,49 +410,52 @@ class DeltaExchangeClient:
         return self._make_request('POST', '/v2/orders', data=data)
     
     def cancel_order(self, order_id: int, *, product_id: Optional[int] = None, product_symbol: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Cancel an order
-        
-        Args:
-            order_id: Order ID to cancel
-            product_id: Optional product id (used for batch fallback)
-            product_symbol: Optional product symbol (used for batch fallback)
-            
-        Returns:
-            Cancellation response
-        """
-        # Prefer batch cancel when we know product context (most reliable)
+        """Minimal 3-step cancel logic (batch -> path -> query) restored from working Streamlit version."""
+        debug_cancel = os.getenv('DELTA_DEBUG_CANCEL', 'false').lower() in ('1','true','yes','on')
+        attempts: List[Dict[str, Any]] = []
+
+        def _log(label: str, resp: Dict[str, Any]):
+            if debug_cancel:
+                try:
+                    self.logger.info(f"[cancel-debug] attempt={label} success={resp.get('success')} status={resp.get('status')} error={resp.get('error')}")
+                except Exception:
+                    pass
+            attempts.append({'label': label, 'resp': resp})
+
+        # 1. Batch cancel (preferred when product context known)
         if product_id or product_symbol:
             payload: Dict[str, Any] = {'orders': [{'id': order_id}]}
             if product_id:
                 payload['product_id'] = product_id
             elif product_symbol:
                 payload['product_symbol'] = product_symbol
-            alt_b = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
-            if isinstance(alt_b, dict) and alt_b.get('success'):
-                alt_b['note'] = 'cancel via batch'
-                return alt_b
-            # If batch failed, try path form next
+            batch_resp = self._make_request('DELETE', '/v2/orders/batch', data=payload, suppress_log=True)
+            _log('batch', batch_resp)
+            if isinstance(batch_resp, dict) and batch_resp.get('success'):
+                batch_resp['note'] = 'cancel via batch'
+                return batch_resp
 
-        # Path parameter form (as per docs)
-        result = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
-        if isinstance(result, dict) and result.get('success'):
-            return result
+        # 2. Direct path form
+        path_resp = self._make_request('DELETE', f'/v2/orders/{order_id}', suppress_log=True)
+        _log('path', path_resp)
+        if isinstance(path_resp, dict) and path_resp.get('success'):
+            return path_resp
 
-        status = None
-        err_txt = ''
-        if isinstance(result, dict):
-            status = result.get('status')
-            err_txt = str(result.get('error'))
+        # 3. Query param fallback
+        qp_resp = self._make_request('DELETE', '/v2/orders', params={'id': order_id}, suppress_log=True)
+        _log('query', qp_resp)
+        if isinstance(qp_resp, dict) and qp_resp.get('success'):
+            qp_resp['note'] = 'cancel via query id'
+            return qp_resp
 
-        # Final fallback: query param form DELETE /v2/orders?id=...
-        qp = {'id': order_id}
-        alt_q = self._make_request('DELETE', '/v2/orders', params=qp, suppress_log=True)
-        if isinstance(alt_q, dict) and alt_q.get('success'):
-            alt_q['note'] = 'cancel via query id'
-            return alt_q
-
-        return result
+        if debug_cancel and isinstance(path_resp, dict):
+            return {
+                'success': False,
+                'status': path_resp.get('status'),
+                'error': path_resp.get('error'),
+                'attempts': attempts
+            }
+        return path_resp
     
     def cancel_all_orders(self, product_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """

@@ -40,3 +40,38 @@
     console.warn('HTMX WebSocket error on', e.detail ? e.detail.socketWrapper.url : 'unknown');
   });
 })();
+
+// Debug probe: log htmx presence & attach listener to cancel buttons to confirm clicks reach JS layer
+window.addEventListener('DOMContentLoaded', () => {
+  console.log('[debug] htmx present:', !!window.htmx, 'ws ext:', !!(window.htmx && window.htmx.extensions && window.htmx.extensions.ws));
+  document.body.addEventListener('click', (e) => {
+    if(e.target && e.target.classList && e.target.classList.contains('order-cancel-btn')){
+      console.log('[debug] cancel button clicked (dom)', e.target.getAttribute('value') || e.target.value);
+    }
+  });
+  // Fetch fallback for cancel forms if htmx not sending HX-Request
+  document.body.addEventListener('submit', async (e) => {
+    const form = e.target;
+    if(!(form instanceof HTMLFormElement)) return;
+    if(!form.classList.contains('inline-cancel-form')) return;
+    // Always intercept to avoid full navigation regardless of htmx presence
+    e.preventDefault();
+    const formData = new FormData(form);
+    try {
+      const resp = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'X-Fetch-Cancel': '1' },
+        body: new URLSearchParams([...formData.entries()])
+      });
+      if(resp.ok){
+        const html = await resp.text();
+        const ordersEl = document.getElementById('orders');
+        if(ordersEl){ ordersEl.innerHTML = html; }
+      } else {
+        console.warn('Cancel fetch failed status', resp.status);
+      }
+    } catch(err){
+      console.warn('Cancel fetch exception', err);
+    }
+  });
+});
