@@ -6,6 +6,8 @@ import hmac
 import hashlib
 import os
 from typing import Optional, Dict, Any, List
+import socket
+from urllib.parse import urlparse
 
 try:
     import websocket  # type: ignore
@@ -35,6 +37,9 @@ class DeltaWSClient:
                 self.ws_url = "wss://socket.india.delta.exchange"
         self.ws = None
         self._thread = None
+
+        # IPv4 enforcement flag; implemented via getaddrinfo monkeypatch in run loop
+        self._force_ipv4 = os.getenv("DELTA_FORCE_IPV4", "false").lower() in {"1", "true", "yes", "on"}
 
         # Runtime flags/events
         self._connected_evt = threading.Event()
@@ -150,7 +155,19 @@ class DeltaWSClient:
         assert self.ws is not None
         while not self._stop_evt.is_set():
             try:
-                self.ws.run_forever(ping_interval=25, ping_timeout=10)
+                if self._force_ipv4:
+                    orig_getaddrinfo = socket.getaddrinfo
+                    def ipv4_only(host, port, family=0, type=0, proto=0, flags=0):  # noqa: ANN001
+                        res = orig_getaddrinfo(host, port, family, type, proto, flags)
+                        ipv4_res = [r for r in res if r and r[0] == socket.AF_INET]
+                        return ipv4_res or res
+                    try:
+                        socket.getaddrinfo = ipv4_only  # type: ignore[assignment]
+                        self.ws.run_forever(ping_interval=25, ping_timeout=10)
+                    finally:
+                        socket.getaddrinfo = orig_getaddrinfo  # type: ignore[assignment]
+                else:
+                    self.ws.run_forever(ping_interval=25, ping_timeout=10)
             except Exception as e:
                 self.logger.error(f"WS run_forever error: {e}")
                 time.sleep(2)
@@ -158,7 +175,10 @@ class DeltaWSClient:
                 time.sleep(1)
 
     def _on_open(self, ws):  # noqa: ANN001
-        self.logger.info("WebSocket opened")
+        if os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in {"1","true","yes","on"}:
+            self.logger.debug("WebSocket opened")
+        else:
+            self.logger.info("WebSocket opened")
         self.is_connected = True
         self._connected_evt.set()
 
@@ -179,7 +199,10 @@ class DeltaWSClient:
         self._flush_outbox(ws)
 
     def _on_close(self, ws, status_code, msg):  # noqa: ANN001
-        self.logger.info(f"WebSocket closed: {status_code} {msg}")
+        if os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in {"1","true","yes","on"}:
+            self.logger.debug(f"WebSocket closed: {status_code} {msg}")
+        else:
+            self.logger.info(f"WebSocket closed: {status_code} {msg}")
         self.is_connected = False
         self.is_authenticated = False
         self._connected_evt.clear()
@@ -201,7 +224,7 @@ class DeltaWSClient:
         # Optional raw debug
         if os.getenv("DELTA_WS_DEBUG", "false").lower() in {"1", "true", "yes"}:
             try:
-                self.logger.info(f"WS recv type={mtype} keys={list(data.keys())[:6]} raw={str(data)[:240]}")
+                self.logger.debug(f"WS recv type={mtype} keys={list(data.keys())[:6]} raw={str(data)[:240]}")
             except Exception:
                 pass
 
@@ -352,3 +375,5 @@ class DeltaWSClient:
             except Exception as e:
                 self.logger.error(f"WS send (flush) failed, requeue: {e}")
                 self._outbox.append(msg)
+
+    # No extra helpers needed; IPv4 enforcement is handled in _run_forever

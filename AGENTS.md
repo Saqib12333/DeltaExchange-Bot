@@ -32,11 +32,12 @@ Agent-focused guide for the Delta Exchange Bot (FastAPI + HTMX + WebSockets trad
 - Interval ~1s: gather mark/positions/orders from WS snapshot; hydrate once via REST if initial WS gap.
 - Balances: REST every ~30s (no private WS channel).
 - Broadcast only when any section changed (simple dict comparison). Increment `version` only on diff.
-- PnL formula: `(mark - entry) * size`. Size sign implies direction if explicit side absent.
+- PnL formula: `(mark - entry) * size * contract_value` recomputed each tick when inputs available; fallback to API `unrealized_pnl`. PnL% uses margin basis if available.
 
 ## HTMX + WS Patterns
 - Each section panel has stable `id` (e.g. `orders`) and a matching WS endpoint (`/ws/orders`).
 - For user actions (place/cancel): HTMX POST returning updated partial. Use `hx-swap="innerHTML"` to preserve container and WS bindings.
+- Placement: `/orders/place` returns partial + `HX-Trigger` to show toast with side/size/limit.
 - Detect HTMX via `request.headers.get('hx-request') == 'true'`; return partial instead of redirect.
 
 ## Order Cancel Workflow (Current)
@@ -79,7 +80,7 @@ streamlit run app.py
 - Unexpected mark=60000 → mock mode still active.
 - Repeated WS connection logs after each action → wrong `hx-swap` replaced container; use `innerHTML`.
 - Signature failures: verify leading `?` on query in signed string & compact JSON body.
-- IPv6 whitelist issues → set `DELTA_FORCE_IPV4=true`.
+- IPv6 whitelist issues → set `DELTA_FORCE_IPV4=true`. For WS, prefer IPv4 via DNS selection while keeping hostname (avoid IP literals due to TLS/SNI).
 
 ## Testing (Lightweight)
 - Manual smoke: mock mode, confirm all four panels populate & live updates occur.

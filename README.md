@@ -3,7 +3,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-HTMX-green.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-4.3.0-informational.svg)](#)
+[![Version](https://img.shields.io/badge/version-4.4.0-informational.svg)](#)
 
 A powerful cryptocurrency trading automation system for Delta Exchange India, featuring a flicker-free FastAPI + HTMX live dashboard and a planned automated strategy engine.
 
@@ -37,7 +37,9 @@ A powerful cryptocurrency trading automation system for Delta Exchange India, fe
 
 - **API Authentication**: Correct signature generation. When signing, include a '?' between path and query if query params exist. Public GET endpoints skip auth headers.
 - **Caching Stability**: Fixed Streamlit cache issues by using underscore-prefixed `_client` params in cached functions and tuned TTLs.
-- **WS-first Mark Price**: Added WebSocket mark price for BTCUSD with REST candles fallback using `MARK:BTCUSD`.
+- **WS-first Mark Price**: Added WebSocket mark price for BTCUSD with REST candles fallback using `MARK:BTCUSD`. Honours `DELTA_FORCE_IPV4=true` for WS too (no IPv6 whitelist needed).
+- **Live PnL Updates**: PnL/PnL% now recomputed each tick from live mark; falls back to API `unrealized_pnl` if needed.
+- **Order Placed Toast**: After placing an order, a toast shows side/size/limit price. Cancel still shows a toast.
 - **UI Simplification**: Removed manual refresh controls and redundant tables; card-first UI.
 - **Auto-Refresh**: Fixed 1-second auto-refresh with countdown placeholder and safe rerun.
 - **Rate Limiting & Timeouts**: Added decorators and consistent 30s request timeouts.
@@ -72,8 +74,8 @@ DELTA_BASE_URL=https://api.india.delta.exchange
 TESTNET_API_URL=https://cdn-ind.testnet.deltaex.org
 # Optional: enable verbose auth debug logs
 DELTA_DEBUG_AUTH=false
-# Optional: force IPv4-only HTTP (helps with IP whitelist issues showing IPv6)
-# DELTA_FORCE_IPV4=true
+# Optional: force IPv4-only (helps with IP whitelist issues)
+DELTA_FORCE_IPV4=true
 ```
 
 ### 4. Get Your API Keys

@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
@@ -31,9 +32,14 @@ logging.basicConfig(level=logging.INFO)
 # Reduce uvicorn access log noise if action-only logging desired
 if os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in ("1","true","yes","on"):
     try:
-        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        # Quiet various noisy loggers
+        logging.getLogger("uvicorn").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
         logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(logging.ERROR)
-        logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+        logging.getLogger("websockets").setLevel(logging.WARNING)
+        logging.getLogger("websocket").setLevel(logging.WARNING)
+        logging.getLogger("src.ws_client").setLevel(logging.WARNING)
         # Remove access logger handlers to suppress connection accepted lines completely
         acc = logging.getLogger("uvicorn.access")
         for h in list(acc.handlers):
@@ -114,6 +120,8 @@ class DataService:
         self._lock = asyncio.Lock()
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        # Cache product metadata to avoid repeated REST calls
+        self._product_cache: Dict[str, Any] = {}
 
     async def start(self):
         # Real clients only
@@ -142,7 +150,10 @@ class DataService:
 
         # Launch background loop
         self._task = asyncio.create_task(self._real_loop())
-        logger.info("DataService.start() scheduled _real_loop task id=%s", id(self._task))
+        if os.getenv("DELTA_ACTION_LOG_ONLY", "true").lower() in ("1","true","yes","on"):
+            logger.debug("DataService.start() scheduled _real_loop task id=%s", id(self._task))
+        else:
+            logger.info("DataService.start() scheduled _real_loop task id=%s", id(self._task))
 
     async def stop(self):
         self._stop.set()
@@ -170,14 +181,13 @@ class DataService:
                 if prev is None and not action_only:
                     logger.info("Loop first iteration starting (tick=%s)", tick)
 
-                # Mark price
-                marks: Dict[str, float] = {}
+                # Mark price (preserve last known to avoid flicker)
+                marks: Dict[str, float] = dict(self.snapshot.marks)
                 price = self.ws_client.get_latest_mark("BTCUSD")
                 if price is not None:
                     marks["BTCUSD"] = float(price)
                     ws_mark_seen = True
-                elif os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes"):
-                    logger.info("No WS price yet")
+                # else remain quiet to avoid log noise
 
                 loop_now = asyncio.get_running_loop().time()
                 if not ws_mark_seen and loop_now - last_rest_mark_pull > 5:
@@ -186,21 +196,25 @@ class DataService:
                         rest_mark = self.rest_client.get_mark_price("BTCUSD")
                         if isinstance(rest_mark, dict) and rest_mark.get("success") and rest_mark.get("mark_price"):
                             marks["BTCUSD"] = float(rest_mark["mark_price"])
-                            logger.info("REST mark fallback pulled price=%s", marks["BTCUSD"])
+                            logger.debug("REST mark fallback pulled price=%s", marks["BTCUSD"])
                     except Exception:
                         pass
 
                 # Positions / Orders
                 positions = self.ws_client.get_positions() if hasattr(self.ws_client, "get_positions") else {}
                 orders = self.ws_client.get_orders() if hasattr(self.ws_client, "get_orders") else {}
-                if not positions:
-                    try:
-                        pos_resp = self.rest_client.get_positions()
-                        if isinstance(pos_resp, dict) and pos_resp.get("success"):
-                            pos_list = pos_resp.get("result") or []
-                            positions = {p.get("product_symbol"): p for p in pos_list if p.get("product_symbol")}
-                    except Exception:
-                        pass
+                rest_positions_map: Dict[str, Any] = {}
+                # Always hydrate a REST snapshot to enrich missing fields (e.g., liquidation_price)
+                try:
+                    pos_resp = self.rest_client.get_positions()
+                    if isinstance(pos_resp, dict) and pos_resp.get("success"):
+                        pos_list = pos_resp.get("result") or []
+                        rest_positions_map = {p.get("product_symbol"): p for p in pos_list if p.get("product_symbol")}
+                        # If WS positions absent, use REST snapshot directly
+                        if not positions:
+                            positions = dict(rest_positions_map)
+                except Exception:
+                    pass
                 if not orders:
                     try:
                         ord_resp = self.rest_client.get_orders()
@@ -209,6 +223,10 @@ class DataService:
                             orders = {str(o.get("id")): o for o in ord_list if o.get("id") is not None}
                     except Exception:
                         pass
+
+                # Enrich positions with liquidation_price, pnl_usd and pnl_pct
+                if positions:
+                    positions = self._enrich_positions(positions, marks, rest_positions_map)
 
                 # Balances
                 now = asyncio.get_running_loop().time()
@@ -284,11 +302,7 @@ class DataService:
                             ws_mark_seen,
                         )
                 else:
-                    if os.getenv("DELTA_WS_DEBUG", "false").lower() in ("1", "true", "yes") and not ws_mark_seen:
-                        try:
-                            print("[DEBUG] Waiting for first mark price... snapshot version", self.snapshot.version)
-                        except Exception:
-                            pass
+                    # Suppress repeated wait logs to keep terminal clean
                     if not first_broadcast_done and self.snapshot.version == 0:
                         try:
                             await self._broadcast_all()
@@ -307,6 +321,87 @@ class DataService:
                     pass
                 await asyncio.sleep(0.5)
             await asyncio.sleep(1.0)
+    def _enrich_positions(self, positions: Dict[str, Any], marks: Dict[str, float], rest_map: Dict[str, Any]) -> Dict[str, Any]:
+        enriched: Dict[str, Any] = {}
+        symbols: Set[str] = set(positions.keys()) | set(rest_map.keys())
+        for sym in symbols:
+            ws_pos = positions.get(sym) or {}
+            rest_pos = rest_map.get(sym) or {}
+            merged = dict(rest_pos)
+            merged.update(ws_pos)
+
+            symbol = _fmt_symbol(_safe_get(merged, "product_symbol", "symbol")) or sym
+            product = None
+            try:
+                if symbol in getattr(self, "_product_cache", {}):
+                    product = self._product_cache[symbol]
+                else:
+                    if self.rest_client is not None:
+                        prod_resp = self.rest_client.get_product_by_symbol(symbol)
+                        if isinstance(prod_resp, dict) and prod_resp.get("success"):
+                            product = prod_resp.get("result") or {}
+                            self._product_cache[symbol] = product
+            except Exception:
+                product = None
+
+            contract_value = _to_float(product.get("contract_value")) if isinstance(product, dict) else None
+            settling_asset_symbol = None
+            if isinstance(product, dict):
+                try:
+                    settling_asset_symbol = ((product.get("settling_asset") or {}).get("symbol"))
+                except Exception:
+                    settling_asset_symbol = None
+
+            entry = _to_float(_safe_get(merged, "entry_price"))
+            size = _to_float(_safe_get(merged, "size", "position_size"))
+            mark_price = marks.get(symbol)
+            liq_price = _to_float(_safe_get(merged, "liquidation_price", "liq_price", "liq"))
+
+            api_unrealized = _to_float(_safe_get(merged, "unrealized_pnl", "pnl"))
+            pnl_usd = None
+            if entry is not None and mark_price is not None and size is not None and contract_value is not None:
+                try:
+                    pnl_usd = (mark_price - entry) * size * contract_value
+                except Exception:
+                    pnl_usd = None
+            if pnl_usd is None:
+                pnl_usd = api_unrealized
+
+            margin_raw = _to_float(_safe_get(merged, "margin_used", "initial_margin", "position_margin", "margin"))
+            margin_usd: Optional[float] = None
+            if margin_raw is not None:
+                if settling_asset_symbol and str(settling_asset_symbol).upper() != "USD":
+                    if mark_price is not None:
+                        margin_usd = float(margin_raw) * float(mark_price)
+                else:
+                    margin_usd = float(margin_raw)
+            if margin_usd is None and entry is not None and size is not None and contract_value is not None:
+                lev = _float_or_default(_safe_get(merged, "leverage", "leverage_value"), 10.0)
+                if lev > 0:
+                    try:
+                        margin_usd = abs(size) * contract_value * entry / lev
+                    except Exception:
+                        pass
+
+            pnl_pct = None
+            if pnl_usd is not None and margin_usd is not None and margin_usd != 0:
+                try:
+                    pnl_pct = (pnl_usd / margin_usd) * 100.0
+                except Exception:
+                    pnl_pct = None
+
+            if liq_price is not None:
+                merged["liquidation_price"] = liq_price
+            if pnl_usd is not None:
+                merged["pnl_usd"] = pnl_usd
+            if pnl_pct is not None:
+                merged["pnl_pct"] = pnl_pct
+            if margin_usd is not None:
+                merged["margin_used_usd"] = margin_usd
+
+            enriched[symbol] = merged
+
+        return enriched
     async def _broadcast_all(self):
         html_mark = templates.get_template("_mark.html").render(mark=self.snapshot.marks.get("BTCUSD"))
         html_bal = templates.get_template("_balances.html").render(balances=self.snapshot.balances)
@@ -352,6 +447,7 @@ async def index(request: Request):
 
 @app.post("/orders/place")
 async def place_order(
+    request: Request,
     product_symbol: str = Form(...),
     size: int = Form(...),
     side: str = Form(...),
@@ -387,6 +483,38 @@ async def place_order(
         logger.info("order.place symbol=%s side=%s size=%s limit=%s id=%s", product_symbol, side, size, limit_price, oid)
     except Exception:
         pass
+    # Refresh orders from REST to ensure consistency and broadcast
+    try:
+        ord_resp = service.rest_client.get_orders()
+        orders: Dict[str, Any] = {}
+        if isinstance(ord_resp, dict) and ord_resp.get("success"):
+            for o in (ord_resp.get("result") or []):
+                if o.get("id") is not None:
+                    orders[str(o.get("id"))] = o
+        async with service._lock:  # type: ignore[attr-defined]
+            service.snapshot.orders = orders
+            service.snapshot.version += 1
+        html_ord = templates.get_template("_orders.html").render(orders=service.snapshot.orders)
+        try:
+            await manager.broadcast("orders", html_ord)
+        except Exception:
+            pass
+    except Exception:
+        html_ord = templates.get_template("_orders.html").render(orders=service.snapshot.orders)
+
+    # If HTMX expects partial, return orders partial and HX-Trigger for toast
+    if request.headers.get("hx-request") == "true":
+        trig = json.dumps({
+            "showToast": {
+                "type": "success",
+                "message": f"Order placed: {side.upper()} {size}{(' @ ' + str(limit_price)) if limit_price is not None else ''}"
+            }
+        })
+        headers = {
+            "HX-Trigger": trig,
+            "HX-Trigger-After-Settle": trig,
+        }
+        return HTMLResponse(html_ord, headers=headers)
     return RedirectResponse("/", status_code=303)
 
 
@@ -517,4 +645,49 @@ async def ws_stats(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws, "stats")
+
+
+# -------------------- Helpers --------------------
+def _to_float(val: Any) -> Optional[float]:
+    try:
+        if val is None or val == "":
+            return None
+        return float(val)
+    except Exception:
+        return None
+
+
+def _abs_float(val: Any) -> Optional[float]:
+    v = _to_float(val)
+    return abs(v) if v is not None else None
+
+
+def _pick(*vals: Any) -> Optional[Any]:
+    for v in vals:
+        if v is not None:
+            return v
+    return None
+
+
+def _safe_get(d: Dict[str, Any], *keys: str) -> Optional[Any]:
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return None
+
+
+def _fmt_symbol(sym: Any) -> Optional[str]:
+    try:
+        s = str(sym).strip()
+        return s if s else None
+    except Exception:
+        return None
+
+
+def _float_or_default(val: Any, default: float) -> float:
+    v = _to_float(val)
+    return v if v is not None else default
+
+
+# enrichment method is now part of DataService
 

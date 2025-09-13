@@ -22,7 +22,7 @@
 
 <section class="card order-form">
   <h2>Place Orders</h2>
-  <form method="post" action="/orders/place" class="form-row">
+  <form method="post" action="/orders/place" class="form-row" hx-post="/orders/place" hx-target="#orders" hx-swap="innerHTML">
     <label>Symbol
       <span class="locked-symbol">BTCUSD</span>
       <input type="hidden" name="product_symbol" value="BTCUSD">
